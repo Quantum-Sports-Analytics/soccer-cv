@@ -49,9 +49,9 @@ uvicorn soccer_cv.demo.app:app --reload   # http://127.0.0.1:8000
 One-time, as project owner:
 
 ```bash
-PROJECT=quantum-analytics-495309 REGION=europe-west4 bash deploy/setup_gcp.sh
+PROJECT=quantum-analytics-495309 REGION=europe-west1 bash deploy/setup_gcp.sh
 # -> creates bucket, Artifact Registry repo, runtime SA, submitter SA + key (submitter-key.json)
-gcloud builds submit --config deploy/cloudbuild.yaml --substitutions=_REGION=europe-west4
+gcloud builds submit --config deploy/cloudbuild.yaml --substitutions=_REGION=europe-west1
 ```
 
 Register `submitter-key.json` in the Claude Science workspace (Customize -> Credentials -> GCP),
@@ -63,8 +63,8 @@ Run a match on GPU (Cloud Batch, one task per camera shot, L4 Spot):
 ```bash
 soccer-cv run --video-uri gs://$BUCKET/in/match.mp4 --run-uri gs://$BUCKET/runs/match \
   --config configs/default.yaml --backend batch --backend-kwargs \
-  '{"project":"quantum-analytics-495309","region":"europe-west4",
-    "image":"europe-west4-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest",
+  '{"project":"quantum-analytics-495309","region":"europe-west1",
+    "image":"europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest",
     "service_account":"soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com",
     "gpu_type":"nvidia-l4","spot":true}'
 ```
@@ -72,11 +72,11 @@ soccer-cv run --video-uri gs://$BUCKET/in/match.mp4 --run-uri gs://$BUCKET/runs/
 Demo on Cloud Run (CPU image; it submits Batch jobs for Tier A):
 
 ```bash
-gcloud run deploy soccer-cv-demo --region europe-west4 \
-  --image europe-west4-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-bc:latest \
+gcloud run deploy soccer-cv-demo --region europe-west1 \
+  --image europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-bc:latest \
   --service-account soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com \
   --memory 4Gi --cpu 2 --timeout 3600 --no-allow-unauthenticated \
-  --set-env-vars RUNS_URI=gs://$BUCKET/runs,BACKEND=batch,BACKEND_KWARGS='{"project":"quantum-analytics-495309","region":"europe-west4","image":"europe-west4-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest","service_account":"soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com"}'
+  --set-env-vars RUNS_URI=gs://$BUCKET/runs,BACKEND=batch,BACKEND_KWARGS='{"project":"quantum-analytics-495309","region":"europe-west1","image":"europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest","service_account":"soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com"}'
 ```
 
 ## Run layout (local dir or gs:// prefix)

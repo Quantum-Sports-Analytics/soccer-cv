@@ -2,7 +2,7 @@
 # One-time GCP setup. Run from a machine where you are logged in as project owner.
 set -euo pipefail
 PROJECT=${PROJECT:-quantum-analytics-495309}
-REGION=${REGION:-europe-west4}          # pick a region where you have L4 (g2) quota
+REGION=${REGION:-europe-west1}          # pick a region where you have L4 (g2) quota
 BUCKET=${BUCKET:-${PROJECT}-soccer-cv}
 SA_NAME=soccer-cv-runner
 

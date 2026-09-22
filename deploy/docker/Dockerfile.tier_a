@@ -1,8 +1,9 @@
-# Tier A: GPU perception (detect / track / ball / summarize). Runs one shot per Batch task.
+# Tier A: GPU perception (calib / detect / track / reid / ball / summarize). One shot per Batch task.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
-ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 RF_HOME=/weights
+ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 \
+    RF_HOME=/weights/models REID_WEIGHTS=/weights/reid/osnet_ain_x1_0_msmt17.pth
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3.11 python3.11-venv python3-pip ffmpeg libgl1 libglib2.0-0 git && \
+      python3.11 python3.11-venv python3-pip ffmpeg libgl1 libglib2.0-0 git curl && \
     rm -rf /var/lib/apt/lists/*
 RUN python3.11 -m venv /venv
 ENV PATH=/venv/bin:$PATH
@@ -13,6 +14,10 @@ COPY pyproject.toml ./
 COPY soccer_cv ./soccer_cv
 COPY configs ./configs
 RUN pip install ".[gpu,gcp]"
-# pre-download detector weights so tasks do not hit the network at start
-RUN python -c "from rfdetr import RFDETRMedium; RFDETRMedium(resolution=952, device='cpu')" || true
+# Weights baked into the image: tasks never touch the network at start.
+RUN mkdir -p /weights/models /weights/reid && \
+    curl -sSfL -o /weights/models/rf-detr-small.pth  https://rfdetr.storage.googleapis.com/small_coco/checkpoint_best_regular.pth && \
+    curl -sSfL -o /weights/models/rf-detr-medium.pth https://rfdetr.storage.googleapis.com/medium_coco/checkpoint_best_regular.pth && \
+    curl -sSfL -o /weights/reid/osnet_ain_x1_0_msmt17.pth \
+      "https://huggingface.co/kaiyangzhou/osnet/resolve/main/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth"
 ENTRYPOINT ["soccer-cv"]
