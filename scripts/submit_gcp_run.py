@@ -51,8 +51,7 @@ def build_job(video: str, run: str, cfg_uri: str, gpu: str, spot: bool, timeout_
         "taskGroups": [{
             "taskCount": 1,
             "taskSpec": {
-                "runnables": [{"container": {"imageUri": IMAGE, "entrypoint": "/bin/bash", "commands": ["-c", cmd],
-                                             "options": "--gpus all"}}],
+                "runnables": [{"container": {"imageUri": IMAGE, "entrypoint": "/bin/bash", "commands": ["-c", cmd]}}],   # Batch mounts GPU + drivers itself; --gpus breaks CDI mode on COS
                 "computeResource": {"cpuMilli": 8000, "memoryMib": 30000},
                 "maxRunDuration": f"{timeout_s}s",
                 "maxRetryCount": 1,

@@ -13,9 +13,14 @@ detect:
   tiles: none
   person_min_height_px: 14
 calib:
-  enabled: false
-  smooth_window: 9
+  enabled: true
   every_n_frames: 25
+  max_err_px: 3.5
+  min_coverage: 0.3
+  min_explained: 0.3
+  anchor_candidates: 3
+  topk: 60
+  refit_every_keyframes: 10
 track:
   max_age: 30
   min_hits: 3

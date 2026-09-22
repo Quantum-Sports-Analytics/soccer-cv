@@ -1,97 +1,222 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>soccer-cv — broadcast perception demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>soccer-cv — broadcast tracking</title>
 <style>
-  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --txt:#e6e8ee; --muted:#9aa3b2; --acc:#4f8cff; --ok:#3ecf8e; --warn:#f2b94b; --bad:#ff6b6b; }
+  :root { --bg:#0e1116; --panel:#161a21; --panel2:#1c212a; --line:#2a303b; --txt:#e7e9ee; --muted:#98a1b0;
+          --acc:#4f8cff; --ok:#3ecf8e; --warn:#f2b94b; --bad:#ff6b6b; }
   * { box-sizing:border-box }
-  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--txt) }
-  header { padding:18px 28px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px }
-  header h1 { font-size:18px; margin:0; font-weight:600 }
-  header span { color:var(--muted) }
-  main { display:grid; grid-template-columns: 1fr 380px; gap:20px; padding:20px 28px; max-width:1500px }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px }
-  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 12px }
-  video { width:100%; background:#000; border-radius:8px }
-  .drop { border:1px dashed var(--line); border-radius:10px; padding:28px; text-align:center; color:var(--muted); cursor:pointer }
-  .drop.over { border-color:var(--acc); color:var(--txt) }
-  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-weight:600; cursor:pointer }
-  button:disabled { opacity:.5; cursor:default }
-  table { width:100%; border-collapse:collapse; font-size:13px }
-  td, th { padding:6px 4px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
-  th { color:var(--muted); font-weight:500 }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#242a36 }
-  .pill.done { background:#173a2c; color:var(--ok) } .pill.running { background:#3a3117; color:var(--warn) } .pill.failed { background:#3a1717; color:var(--bad) }
-  .legend span { display:inline-block; margin-right:14px; color:var(--muted) }
-  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px }
-  code { color:var(--muted) }
-  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:220px; overflow:auto }
+  body { margin:0; font:14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:14px; padding:12px 20px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; font-weight:600 }
+  header .sub { color:var(--muted) }
+  header .gpu { margin-left:auto; font-size:12px; color:var(--muted) }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--muted) }
+  main { display:grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 50px) }
+  aside { border-right:1px solid var(--line); padding:16px; overflow:auto }
+  section { padding:16px 20px; overflow:auto }
+  .drop { border:1.5px dashed var(--line); border-radius:10px; padding:22px 12px; text-align:center; color:var(--muted); cursor:pointer; transition:.15s }
+  .drop.hover { border-color:var(--acc); color:var(--txt); background:#4f8cff10 }
+  .bar { height:6px; background:var(--panel2); border-radius:3px; overflow:hidden; margin-top:10px; display:none }
+  .bar > div { height:100%; width:0; background:var(--acc); transition: width .2s }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:20px 0 8px }
+  .run { padding:9px 10px; border-radius:8px; cursor:pointer; margin-bottom:4px; border:1px solid transparent }
+  .run:hover { background:var(--panel) } .run.sel { background:var(--panel); border-color:var(--line) }
+  .run .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .run .meta { font-size:12px; color:var(--muted) }
+  .chip { font-size:11px; padding:1px 7px; border-radius:10px; background:var(--panel2); color:var(--muted); float:right }
+  .chip.done { color:var(--ok) } .chip.failed, .chip.cancelled { color:var(--bad) } .chip.running, .chip.waiting_gpu, .chip.queued { color:var(--warn) }
+  .empty { color:var(--muted); padding:60px 0; text-align:center }
+  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap }
+  .top h3 { margin:0; font-size:16px; font-weight:600 }
+  .status { color:var(--muted) }
+  button { background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:7px; padding:5px 11px; cursor:pointer; font:inherit }
+  button:hover { border-color:var(--acc) } button.on { background:var(--acc); border-color:var(--acc) }
+  button.danger:hover { border-color:var(--bad) }
+  .grid { display:grid; grid-template-columns: minmax(0, 1fr) 330px; gap:18px; margin-top:14px }
+  video { width:100%; background:#000; border-radius:8px; display:block }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:14px }
+  .kv { display:grid; grid-template-columns: 1fr auto; gap:3px 12px; font-size:13px }
+  .kv .k { color:var(--muted) } .kv .v { text-align:right; font-variant-numeric: tabular-nums }
+  .good { color:var(--ok) } .mid { color:var(--warn) } .poor { color:var(--bad) }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; font-variant-numeric: tabular-nums }
+  th { text-align:left; color:var(--muted); font-weight:500; padding:4px 6px; border-bottom:1px solid var(--line) }
+  td { padding:4px 6px; border-bottom:1px solid #20252e }
+  tr.click { cursor:pointer } tr.click:hover td { background:var(--panel2) }
+  .legend { font-size:12px; color:var(--muted); line-height:1.6 }
+  pre { white-space:pre-wrap; font-size:11.5px; color:#c9ced8; background:#0b0d11; padding:10px; border-radius:6px; max-height:260px; overflow:auto }
+  .steps { display:flex; gap:6px; margin-top:10px; font-size:12px }
+  .steps span { padding:3px 9px; border-radius:12px; background:var(--panel2); color:var(--muted) }
+  .steps span.cur { background:#f2b94b22; color:var(--warn) } .steps span.past { color:var(--ok) }
 </style>
 </head>
 <body>
-<header><h1>soccer-cv</h1><span>broadcast perception — players, ball, identity, overlay · backend: {{ backend }}</span></header>
+<header>
+  <h1>soccer-cv</h1><span class="sub">suivi joueurs · arbitres · ballon · calibration terrain — diffusion TV</span>
+  <span class="gpu" id="gpu"><span class="dot"></span>backend : {{ backend }}</span>
+</header>
 <main>
-  <section>
-    <div class="card" id="uploadCard">
-      <h2>1 · Input video</h2>
-      <div class="drop" id="drop">Drop a broadcast clip (.mp4) here or click to choose</div>
-      <input type="file" id="file" accept="video/mp4,video/*" hidden>
-      <p style="margin:12px 0 0"><button id="go" disabled>Run pipeline</button> <span id="fname" style="color:var(--muted);margin-left:10px"></span></p>
-    </div>
-    <div class="card" style="margin-top:20px">
-      <h2>3 · Overlay</h2>
-      <video id="video" controls preload="metadata"></video>
-      <p class="legend" style="margin:10px 0 0">
-        <span><i style="background:#e74c3c"></i>team A</span>
-        <span><i style="background:#3cc8ff"></i>team B</span>
-        <span><i style="background:#a0a0a0"></i>? = unknown (abstained)</span>
-        <span><i style="background:#fff;border:1px solid #888"></i>white ring = re-linked after leaving the frame</span>
-        <span><i style="background:#ffa500"></i>orange dot = ambiguous association</span>
-        <span>ball: white visible · yellow in flight · violet interpolated (occluded)</span>
-      </p>
-    </div>
-  </section>
   <aside>
-    <div class="card">
-      <h2>2 · Run</h2>
-      <p>Status: <span class="pill" id="status">idle</span> <span id="elapsed" style="color:var(--muted)"></span></p>
-      <table id="stages"><thead><tr><th>stage</th><th>s</th><th>metrics</th></tr></thead><tbody></tbody></table>
-    </div>
-    <div class="card" style="margin-top:20px">
-      <h2>Log</h2>
-      <div id="log"></div>
-    </div>
+    <div class="drop" id="drop">Déposer une vidéo ici<br><small>ou cliquer pour choisir (mp4, mkv, webm)</small></div>
+    <input type="file" id="file" accept="video/*" hidden>
+    <div class="bar" id="bar"><div></div></div>
+    <div class="status" id="upmsg" style="margin-top:6px;font-size:12px"></div>
+    <h2>Vidéos testées</h2>
+    <div id="runs"></div>
   </aside>
+  <section id="detail"><div class="empty">Dépose une vidéo, ou sélectionne un run dans l'historique.</div></section>
 </main>
+
 <script>
-const drop = document.getElementById('drop'), fileIn = document.getElementById('file'), go = document.getElementById('go');
-const statusEl = document.getElementById('status'), stagesEl = document.querySelector('#stages tbody');
-const logEl = document.getElementById('log'), video = document.getElementById('video');
-let file = null, timer = null, t0 = null;
-const log = m => { logEl.textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`; logEl.scrollTop = logEl.scrollHeight; };
+const $ = s => document.querySelector(s);
+let current = null, pollT = null, which = 'overlay';
+const fmt = (v, d=2) => v === null || v === undefined ? '—' : (typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(d)) : v);
+const pct = v => v === null || v === undefined ? '—' : (100*v).toFixed(0) + ' %';
+const cls = (v, good, mid, higherBetter=true) => v == null ? '' : (higherBetter ? (v >= good ? 'good' : v >= mid ? 'mid' : 'poor') : (v <= good ? 'good' : v <= mid ? 'mid' : 'poor'));
+const STATUS = {submitting:'envoi', queued:'en file', waiting_gpu:'attente GPU', running:'calcul GPU', done:'terminé', failed:'échec', cancelled:'annulé'};
+
+// ---------------- upload
+const drop = $('#drop'), fileIn = $('#file');
 drop.onclick = () => fileIn.click();
-drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
-drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); setFile(e.dataTransfer.files[0]); };
-fileIn.onchange = () => setFile(fileIn.files[0]);
-function setFile(f){ file = f; document.getElementById('fname').textContent = f ? `${f.name} (${(f.size/1e6).toFixed(1)} MB)` : ''; go.disabled = !f; }
-go.onclick = async () => {
-  go.disabled = true; const fd = new FormData(); fd.append('file', file);
-  setStatus('uploading'); log(`uploading ${file.name}`);
-  const r = await fetch('/api/jobs', {method:'POST', body:fd}); const j = await r.json();
-  log(`job ${j.job_id} created`); t0 = Date.now(); poll(j.job_id);
-};
-function setStatus(s){ statusEl.textContent = s; statusEl.className = 'pill ' + (s==='done'?'done':s==='failed'?'failed':'running'); }
-const fmt = v => typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(3)) : (typeof v === 'object' ? JSON.stringify(v) : v);
-async function poll(id){
-  const r = await fetch(`/api/jobs/${id}`); const j = await r.json();
-  setStatus(j.status); document.getElementById('elapsed').textContent = `${((Date.now()-t0)/1000).toFixed(0)} s`;
-  stagesEl.innerHTML = j.stages.map(s => `<tr><td><code>${s.stage}</code></td><td>${s.seconds}</td><td>${Object.entries(s.metrics).map(([k,v])=>`${k}=${fmt(v)}`).join('<br>')}</td></tr>`).join('');
-  if (j.status === 'done') { log('done — loading overlay'); video.src = `/api/jobs/${id}/overlay.mp4`; go.disabled = false; return; }
-  if (j.status === 'failed') { log('FAILED ' + j.error); go.disabled = false; return; }
-  setTimeout(() => poll(id), 2000);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover') };
+drop.ondragleave = () => drop.classList.remove('hover');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('hover'); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]) };
+fileIn.onchange = () => fileIn.files[0] && upload(fileIn.files[0]);
+
+async function upload(f) {
+  const bar = $('#bar'), fill = bar.firstElementChild, msg = $('#upmsg');
+  bar.style.display = 'block'; fill.style.width = '0'; msg.textContent = `${f.name} — ${(f.size/1e6).toFixed(1)} Mo`;
+  const s = await (await fetch('/api/uploads', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename:f.name, size:f.size})})).json();
+  if (!s.run_id) { msg.textContent = 'refusé : ' + JSON.stringify(s); return }
+  const n = Math.ceil(f.size / s.chunk_bytes);
+  for (let i = 0; i < n; i++) {
+    const part = f.slice(i * s.chunk_bytes, (i + 1) * s.chunk_bytes);
+    const r = await fetch(`/api/uploads/${s.run_id}/${i}`, {method:'PUT', body: part});
+    if (!r.ok) { msg.textContent = 'échec de l\'envoi'; return }
+    fill.style.width = (100 * (i + 1) / n) + '%';
+  }
+  msg.textContent = 'envoi terminé — soumission du calcul…';
+  const r = await (await fetch(`/api/uploads/${s.run_id}/finish`, {method:'POST'})).json();
+  msg.textContent = `run ${r.run_id} : ${STATUS[r.status] || r.status}`;
+  setTimeout(() => { bar.style.display = 'none' }, 1500);
+  await loadRuns(); select(r.run_id);
 }
+
+// ---------------- history
+async function loadRuns() {
+  const runs = await (await fetch('/api/runs')).json();
+  $('#runs').innerHTML = runs.length ? runs.map(r => `
+    <div class="run ${r.id === current ? 'sel' : ''}" onclick="select('${r.id}')">
+      <span class="chip ${r.status}">${STATUS[r.status] || r.status}</span>
+      <div class="name">${r.filename || r.id}</div>
+      <div class="meta">${new Date(r.created*1000).toLocaleString('fr-FR')} · ${fmt(r.size_mb,1)} Mo</div>
+    </div>`).join('') : '<div class="status" style="font-size:12px">aucune vidéo pour l\'instant</div>';
+}
+
+// ---------------- detail
+async function select(id) {
+  current = id; which = 'overlay'; clearTimeout(pollT);
+  document.querySelectorAll('.run').forEach(e => e.classList.toggle('sel', e.getAttribute('onclick').includes(id)));
+  $('#detail').innerHTML = '<div class="empty">chargement…</div>';
+  await refresh(true);
+}
+
+function stepsHTML(st) {
+  const order = ['queued', 'waiting_gpu', 'running', 'done'];
+  const k = order.indexOf(st);
+  return '<div class="steps">' + order.map((s, i) => `<span class="${i < k ? 'past' : i === k ? (s === 'done' ? 'past' : 'cur') : ''}">${STATUS[s]}</span>`).join('') + '</div>';
+}
+
+async function refresh(first=false) {
+  const id = current; if (!id) return;
+  const j = await (await fetch(`/api/runs/${id}`)).json();
+  if (id !== current) return;
+  const done = j.status === 'done', live = ['submitting','queued','waiting_gpu','running'].includes(j.status);
+  const rp = j.report || {};
+  const el = $('#detail');
+  if (first || !el.querySelector('video') || !done) {
+    el.innerHTML = `
+      <div class="top">
+        <h3>${j.filename || j.id}</h3>
+        <span class="chip ${j.status}">${STATUS[j.status] || j.status}</span>
+        <span class="status">${j.gpu_seconds ? 'GPU ' + Math.round(j.gpu_seconds) + ' s' : ''}</span>
+        <span style="flex:1"></span>
+        ${done ? `<button id="bOv" class="${which==='overlay'?'on':''}" onclick="setWhich('overlay')">overlay</button>
+                  <button id="bIn" class="${which==='input'?'on':''}" onclick="setWhich('input')">original</button>` : ''}
+        ${live ? `<button class="danger" onclick="cancelRun('${j.id}')">annuler (libère le GPU)</button>` : ''}
+      </div>
+      ${live ? stepsHTML(j.status) + `<div class="status" style="margin-top:8px;font-size:12px">${j.batch_event || ''}</div>` : ''}
+      ${j.status === 'failed' ? `<div class="card" style="margin-top:14px"><b class="poor">Échec</b> ${j.error || ''}<pre>${(j.log_tail || []).join('\n')}</pre></div>` : ''}
+      <div class="grid">
+        <div>
+          ${done ? `<video id="vid" controls preload="metadata" src="/api/runs/${j.id}/video/${which}"></video>
+            <div class="legend" style="margin-top:8px">
+              Couleur = équipe (clustering relatif) · vert = officiels · <b>?</b> = identité non attribuée (abstention plutôt qu'erreur) ·
+              cadre blanc = retour d'un joueur après sortie · point = assignation ambiguë · grille jaune = terrain calibré ·
+              panneau de droite = état du roster.</div>
+            <h2>Situations ambiguës (croisements) — cliquer pour y aller</h2><div id="win" class="card">…</div>`
+            : `<div class="card empty">${live ? 'Le calcul tourne sur GPU. La page se met à jour seule ; tu peux la fermer et revenir.' : 'Pas de sortie.'}</div>`}
+        </div>
+        <div>
+          <div class="card"><h2 style="margin-top:0">Qualité de ce run</h2>
+            <div class="kv">
+              <span class="k">images · plans</span><span class="v">${fmt(rp.frames)} · ${fmt(rp.shots)}</span>
+              <span class="k">personnes détectées / image</span><span class="v">${fmt(rp.persons_per_frame,1)}</span>
+              <span class="k">images calibrées</span><span class="v ${cls(rp.calibrated_frac,.9,.6)}">${pct(rp.calibrated_frac)}</span>
+              <span class="k">erreur calibration (médiane)</span><span class="v ${cls(rp.calib_err_px,8,15,false)}">${fmt(rp.calib_err_px,1)} px</span>
+              <span class="k">détections hors terrain retirées</span><span class="v">${fmt(rp.off_pitch_rejected)}</span>
+              <span class="k">tracklets</span><span class="v">${fmt(rp.tracklets)}</span>
+              <span class="k">identités finales</span><span class="v">${fmt(rp.identities)}</span>
+              <span class="k">re-liaisons (sortie → retour)</span><span class="v">${fmt(rp.relinks)}</span>
+              <span class="k">tracklets en abstention</span><span class="v">${fmt(rp.abstained_tracklets)}</span>
+              <span class="k">croisements ambigus</span><span class="v">${fmt(rp.ambiguous_windows)}</span>
+              <span class="k">· échanges corrigés</span><span class="v">${fmt(rp.swaps_fixed)}</span>
+              <span class="k">· indécidables</span><span class="v">${fmt(rp.undecidable_windows)}</span>
+              <span class="k">ballon vu</span><span class="v ${cls(rp.ball_visible_frac,.9,.7)}">${pct(rp.ball_visible_frac)}</span>
+              <span class="k">ballon localisé (vu + interpolé)</span><span class="v ${cls(rp.ball_located_frac,.95,.8)}">${pct(rp.ball_located_frac)}</span>
+              <span class="k">temps de calcul (somme des étapes)</span><span class="v">${fmt(rp.compute_seconds,0)} s</span>
+            </div></div>
+          <div class="card"><h2 style="margin-top:0">Étapes</h2>
+            <table><tr><th>étape</th><th style="text-align:right">s</th></tr>
+            ${(j.stages||[]).map(s => `<tr title='${JSON.stringify(s.metrics).replace(/'/g,"")}'><td><code>${s.stage}</code></td><td style="text-align:right">${fmt(s.seconds,1)}</td></tr>`).join('') || '<tr><td colspan=2 class="status">en attente</td></tr>'}
+            </table></div>
+          <div class="legend">run <code>${j.id}</code> · config <code>${j.config || ''}</code>${j.code_uri ? ' · code <code>' + j.code_uri.split('/').pop() + '</code>' : ''}</div>
+        </div>
+      </div>`;
+    if (done) loadWindows(j.id);
+  }
+  if (live) pollT = setTimeout(() => refresh(), 5000);
+  else loadRuns();
+}
+
+async function loadWindows(id) {
+  const w = await (await fetch(`/api/runs/${id}/windows`)).json();
+  const box = $('#win'); if (!box) return;
+  const DEC = {keep:'pas d\'échange', swap:'échange corrigé', split:'coupé → Tier B', undecidable:'indécidable'};
+  box.innerHTML = w.length ? `<table><tr><th>début</th><th>fin</th><th>pistes</th><th>décision</th><th style="text-align:right">marge</th></tr>
+    ${w.map(x => `<tr class="click" onclick="seek(${x.t0})"><td>${x.t0.toFixed(1)} s</td><td>${x.t1.toFixed(1)} s</td><td>${x.tracks.join(' / ')}</td>
+      <td class="${x.decision==='keep'?'':x.decision==='swap'?'good':'mid'}">${DEC[x.decision] || x.decision}</td><td style="text-align:right">${fmt(x.margin,2)}</td></tr>`).join('')}</table>`
+    : '<span class="status">aucun croisement ambigu détecté</span>';
+}
+
+function seek(t) { const v = $('#vid'); if (v) { v.currentTime = Math.max(0, t - 1.0); v.play() } }
+function setWhich(w) { which = w; const v = $('#vid'); const t = v ? v.currentTime : 0;
+  v.src = `/api/runs/${current}/video/${w}`; v.currentTime = t;
+  $('#bOv').classList.toggle('on', w === 'overlay'); $('#bIn').classList.toggle('on', w === 'input') }
+async function cancelRun(id) { if (!confirm('Annuler ce calcul ? La VM GPU est supprimée immédiatement.')) return;
+  await fetch(`/api/runs/${id}/cancel`, {method:'POST'}); refresh(true) }
+
+async function gpu() {
+  try { const g = await (await fetch('/api/gpu')).json();
+    const n = g.active.length;
+    $('#gpu').innerHTML = `<span class="dot" style="background:${n ? 'var(--warn)' : 'var(--ok)'}"></span>` +
+      (g.backend === 'batch' ? (n ? `${n} job GPU actif${n > 1 ? 's' : ''}` : 'aucun GPU actif') : 'backend local');
+  } catch (e) {}
+  setTimeout(gpu, 15000);
+}
+loadRuns(); gpu();
 </script>
 </body>
 </html>

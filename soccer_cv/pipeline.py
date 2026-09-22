@@ -64,9 +64,11 @@ def run_tier_a_shot(run_uri: str, shot_id: str, cfg: dict, detector=None, replay
 def run_match(video_uri: str, run_uri: str, config_path: str, backend: str = "local",
               backend_kwargs: dict | None = None, only_main: bool = True, replay_uri: str | None = None) -> dict:
     t0 = time.time()
-    cfg = load_config(config_path)
+    cfg_local = Storage.localize(config_path)          # config may itself live on gs://
+    cfg = load_config(cfg_local)
     cfg_uri = Storage.join(run_uri, "config.yaml")
-    Storage.write_bytes(cfg_uri, Path(config_path).read_bytes())
+    if cfg_uri != config_path:
+        Storage.write_bytes(cfg_uri, Path(cfg_local).read_bytes())
 
     # ---- stage 0
     ingest_uri = Storage.join(run_uri, "ingest")

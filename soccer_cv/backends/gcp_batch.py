@@ -56,7 +56,7 @@ class CloudBatchBackend(Backend):
                       'IFS="," read -ra SHOTS <<< "$SHOT_LIST"; '
                       'soccer-cv tier-a --run-uri "$RUN_URI" --shot-id "${SHOTS[$BATCH_TASK_INDEX]}" '
                       '--config "$CONFIG_URI"'],
-            options="--gpus all" if self.gpu_count else "",
+            # no --gpus: Batch mounts the GPU and drivers into the container itself (CDI mode on COS)
         )
         task = batch_v1.TaskSpec(runnables=[runnable],
                                  max_run_duration=f"{self.task_timeout_s}s", max_retry_count=2)

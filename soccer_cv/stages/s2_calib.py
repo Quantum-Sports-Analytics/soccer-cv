@@ -134,26 +134,51 @@ def render_model(H: np.ndarray, img_w: int, img_h: int, scale: float = 1.0) -> n
     return m
 
 
+def _dense_model(step_m: float = 0.5) -> np.ndarray:
+    out = []
+    for seg in MODEL:
+        d = np.linalg.norm(np.diff(seg, axis=0), axis=1)
+        t = np.concatenate([[0], np.cumsum(d)])
+        n = max(2, int(t[-1] / step_m))
+        tt = np.linspace(0, t[-1], n)
+        out.append(np.stack([np.interp(tt, t, seg[:, 0]), np.interp(tt, t, seg[:, 1])], 1))
+    return np.vstack(out)
+
+
+MODEL_COARSE = _dense_model(0.5)     # coarse grid search (quarter resolution)
+MODEL_DENSE = _dense_model(0.1)      # refinement: <= a few px between samples at broadcast focal lengths
+
+
 def chamfer_cost(H: np.ndarray, dt: np.ndarray, img_w: int, img_h: int, mask_pts: np.ndarray | None = None,
-                 trunc: float = 30.0, scale: float = 1.0) -> tuple[float, float]:
-    """Symmetric truncated chamfer: model->lines (dt of the line mask at projected model points)
-    plus lines->model (dt of the rendered model at line-mask pixels). `dt`, `mask_pts` are at
-    `scale` times the image resolution."""
-    uv, ok = project(H, MODEL_PTS)
+                 trunc: float = 30.0, scale: float = 1.0, detail: bool = False, model: np.ndarray | None = None):
+    """Symmetric truncated chamfer, in full-resolution pixels.
+
+    forward : model points in view -> nearest detected line pixel (distance transform lookup)
+    reverse : detected line pixels -> nearest projected model point (KD-tree, no rendering)
+    `dt` and `mask_pts` are at `scale` x image resolution. With detail=True also returns
+    (coverage, inlier_err_px): the fraction of in-view model points within 4 px of a line,
+    and the mean distance of those matched model points — the two quantities used for
+    validity, since neither is inflated by white pixels that are not pitch lines."""
+    from scipy.spatial import cKDTree
+    uv, ok = project(H, MODEL_DENSE if model is None else model)
     inside = ok & (uv[:, 0] >= 0) & (uv[:, 0] < img_w) & (uv[:, 1] >= 0) & (uv[:, 1] < img_h)
-    if inside.sum() < 80:
-        return 1e3, 0.0
+    if inside.sum() < 60:
+        return (1e3, 0.0, 99.0, 0.0) if detail else (1e3, 0.0)
     uvs = uv[inside] * scale
-    d = dt[uvs[:, 1].astype(int), uvs[:, 0].astype(int)]
-    fwd = np.minimum(d, trunc * scale).mean() / scale
-    cov = float((d < 4 * scale).mean())
-    rev = 0.0
+    d = dt[uvs[:, 1].astype(int), uvs[:, 0].astype(int)] / scale
+    fwd = float(np.minimum(d, trunc).mean())
+    matched = d < 4.0
+    cov = float(matched.mean())
+    rev, explained = 0.0, 0.0
     if mask_pts is not None and len(mask_pts):
-        rm = render_model(H, img_w, img_h, scale)
-        dtr = cv2.distanceTransform(255 - rm, cv2.DIST_L2, 3)
-        dr = dtr[mask_pts[:, 1], mask_pts[:, 0]]
-        rev = np.minimum(dr, trunc * scale).mean() / scale
-    return float(fwd + rev), cov
+        tree = cKDTree(uvs)
+        dr, _ = tree.query(mask_pts, k=1, distance_upper_bound=trunc * scale)
+        dr = np.where(np.isfinite(dr), dr, trunc * scale) / scale
+        rev = float(dr.mean()); explained = float((dr < 4.0).mean())
+    cost = fwd + rev
+    if detail:
+        return cost, cov, (float(d[d < 8.0].mean()) if (d < 8.0).any() else 99.0), explained
+    return cost, cov
 
 
 def mask_points(m: np.ndarray, scale: float, max_pts: int = 1500) -> np.ndarray:
@@ -164,14 +189,20 @@ def mask_points(m: np.ndarray, scale: float, max_pts: int = 1500) -> np.ndarray:
     return np.stack([xs, ys], 1)
 
 
-def coarse_search(m: np.ndarray, img_w: int, img_h: int, topk: int = 6) -> list[np.ndarray]:
-    """Grid over broadcast-camera priors at quarter resolution; returns the top-k distinct candidates."""
-    sc = 0.25
+def _coarse_inputs(m: np.ndarray, sc: float = 0.25, n_pts: int = 600):
     small = cv2.resize(m, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
-    dt = cv2.distanceTransform(255 - small, cv2.DIST_L2, 3)
-    mp = mask_points(m, sc, 600)
+    return cv2.distanceTransform(255 - small, cv2.DIST_L2, 3), mask_points(m, sc, n_pts), sc
+
+
+def coarse_search(m: np.ndarray, img_w: int, img_h: int, topk: int = 60, trunc: float = 80.0) -> list[np.ndarray]:
+    """Grid over broadcast-camera priors at quarter resolution, with a wide truncation so the
+    cost is smooth enough for local descent from a grid point. Returns the top-k distinct seeds."""
+    dt, mp, sc = _coarse_inputs(m)
     cands = []
-    for side in (-1.0, 1.0):                                   # behind the near (-) or far (+) touchline
+    # Camera behind the near touchline only (y < 0). The pitch is symmetric under a 180 degree
+    # rotation, so a far-side camera is the same image with (x, y) -> (-x, -y): searching one
+    # side loses nothing and fixes the left/right convention (TV main camera = near side).
+    for side in (-1.0,):
         for cx in (-20.0, 0.0, 20.0):
             for dist in (20.0, 40.0, 70.0):
                 for cz in (15.0, 25.0, 45.0):
@@ -179,50 +210,101 @@ def coarse_search(m: np.ndarray, img_w: int, img_h: int, topk: int = 6) -> list[
                         for tilt in (8, 13, 18, 24, 30):
                             for f in (1500, 2200, 3200, 4600, 6500, 9000):
                                 p = np.array([cx, side * (W / 2 + dist), cz, (pan if side < 0 else 180 + pan), tilt, f])
-                                c, _ = chamfer_cost(camera_H(p, img_w, img_h), dt, img_w, img_h, mp, scale=sc)
+                                c, _ = chamfer_cost(camera_H(p, img_w, img_h), dt, img_w, img_h, mp, scale=sc,
+                                                    model=MODEL_COARSE, trunc=trunc)
                                 cands.append((c, p))
     cands.sort(key=lambda t: t[0])
     out = []
     for c, p in cands:
-        # distinct: differ in pan by >= 10 deg or side or position
-        if all(abs(p[3] - q[3]) >= 10 or np.sign(p[1]) != np.sign(q[1]) or abs(p[0] - q[0]) >= 20 or abs(p[2] - q[2]) >= 10 for q in out):
+        if all(np.abs((p - q) / np.array([10, 10, 8, 8, 4, 1000])).max() >= 1 for q in out):
             out.append(p)
         if len(out) >= topk:
             break
     return out
 
 
-def fit_frame(m: np.ndarray, img_w: int, img_h: int, topk: int = 6) -> tuple[np.ndarray, float, float]:
-    """Coarse grid -> refine the top-k candidates -> keep the best at full resolution."""
-    best = (None, np.inf, 0.0)
-    for p0 in coarse_search(m, img_w, img_h, topk):
-        p, c, cov = refine(p0, m, img_w, img_h, iters=1)
-        if c < best[1]:
-            best = (p, c, cov)
-    p, c, cov = refine(best[0], m, img_w, img_h, iters=1)
-    return p, c, cov
+def _quick_refine(p0: np.ndarray, dt, mp, sc, img_w, img_h, trunc: float, maxfev: int) -> tuple[np.ndarray, float]:
+    scale = np.array([8.0, 8.0, 5.0, 6.0, 4.0, 600.0])
+
+    def f(z):
+        return chamfer_cost(camera_H(p0 + z * scale, img_w, img_h), dt, img_w, img_h, mp, scale=sc,
+                            model=MODEL_COARSE, trunc=trunc)[0]
+    res = minimize(f, np.zeros(6), method="Powell", options={"xtol": 1e-2, "ftol": 1e-3, "maxfev": maxfev})
+    return p0 + res.x * scale, float(res.fun)
 
 
-def refine(p0: np.ndarray, m: np.ndarray, img_w: int, img_h: int, iters: int = 2) -> tuple[np.ndarray, float, float]:
+def fit_frame(m: np.ndarray, img_w: int, img_h: int, topk: int = 60, finalists: int = 5):
+    """Grid -> quick descent from the `topk` best seeds (smooth coarse cost) -> the `finalists`
+    best are refined at half resolution with the sharp cost -> lowest cost wins."""
+    dt, mp, sc = _coarse_inputs(m)
+    seeds = coarse_search(m, img_w, img_h, topk)
+    quick = sorted((_quick_refine(p0, dt, mp, sc, img_w, img_h, 80.0, 250) for p0 in seeds), key=lambda t: t[1])
+    quick = [_quick_refine(p, dt, mp, sc, img_w, img_h, 30.0, 300) for p, _ in quick[:3 * finalists]]
+    quick.sort(key=lambda t: t[1])
+    best = None
+    for p, _ in quick[:finalists]:
+        r = refine(p, m, img_w, img_h, iters=1, maxfev=800)
+        if best is None or r[1] < best[1]:
+            best = r
+    return best
+
+
+def refine(p0: np.ndarray, m: np.ndarray, img_w: int, img_h: int, iters: int = 2,
+           maxfev: int = 1500) -> tuple[np.ndarray, float, float, float, float]:
+    """Local optimisation of the 6 camera parameters.
+    Returns (params, cost, model_coverage, inlier_err_px, lines_explained)."""
     sc = 0.5
     small = cv2.resize(m, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
     dt = cv2.distanceTransform(255 - small, cv2.DIST_L2, 3)
-    mp = mask_points(m, sc, 1500)
+    mp = mask_points(m, sc, 1200)
     scale = np.array([8.0, 8.0, 5.0, 6.0, 4.0, 600.0])
 
     def f(z):
         return chamfer_cost(camera_H(p0 + z * scale, img_w, img_h), dt, img_w, img_h, mp, scale=sc)[0]
     z = np.zeros(6)
     for _ in range(iters):
-        res = minimize(f, z, method="Powell", options={"xtol": 1e-3, "ftol": 1e-4, "maxfev": 4000})
-        z = res.x
-        res = minimize(f, z, method="Nelder-Mead", options={"xatol": 1e-3, "fatol": 1e-4, "maxfev": 2000, "initial_simplex": z + np.vstack([np.zeros(6), 0.3 * np.eye(6)])})
-        z = res.x
+        z = minimize(f, z, method="Powell", options={"xtol": 1e-3, "ftol": 1e-4, "maxfev": maxfev}).x
     p = p0 + z * scale
-    # final numbers at full resolution
     dt_full = cv2.distanceTransform(255 - m, cv2.DIST_L2, 3)
-    c, cov = chamfer_cost(camera_H(p, img_w, img_h), dt_full, img_w, img_h, mask_points(m, 1.0, 3000))
-    return p, c, cov
+    c, cov, err, expl = chamfer_cost(camera_H(p, img_w, img_h), dt_full, img_w, img_h, mask_points(m, 1.0, 2500), detail=True)
+    return p, c, cov, err, expl
+
+
+def refine_ptz(pos: np.ndarray, ptz0: np.ndarray, m: np.ndarray, img_w: int, img_h: int, maxfev: int = 600):
+    """Refine pan / tilt / focal with the camera position fixed. Same return shape as `refine`."""
+    sc = 0.5
+    small = cv2.resize(m, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
+    dt = cv2.distanceTransform(255 - small, cv2.DIST_L2, 3)
+    mp = mask_points(m, sc, 1200)
+    scale = np.array([4.0, 2.0, 400.0])
+
+    def f(z):
+        q = ptz0 + z * scale
+        return chamfer_cost(camera_H(np.r_[pos, q], img_w, img_h), dt, img_w, img_h, mp, scale=sc)[0]
+    z = minimize(f, np.zeros(3), method="Powell", options={"xtol": 1e-3, "ftol": 1e-4, "maxfev": maxfev}).x
+    params = np.r_[pos, ptz0 + z * scale]
+    dt_full = cv2.distanceTransform(255 - m, cv2.DIST_L2, 3)
+    c, cov, err, expl = chamfer_cost(camera_H(params, img_w, img_h), dt_full, img_w, img_h, mask_points(m, 1.0, 2500), detail=True)
+    return params, c, cov, err, expl
+
+
+def search_ptz(pos: np.ndarray, m: np.ndarray, img_w: int, img_h: int, finalists: int = 4):
+    """Grid over pan / tilt / focal for a known camera position, then local refinement."""
+    dt, mp, sc = _coarse_inputs(m)
+    cands = []
+    for pan in np.arange(-60, 61, 3.0):
+        for tilt in np.arange(6, 32, 1.5):
+            for f in np.geomspace(1400, 9500, 18):
+                H = camera_H(np.r_[pos, pan, tilt, f], img_w, img_h)
+                cands.append((chamfer_cost(H, dt, img_w, img_h, mp, scale=sc, model=MODEL_COARSE, trunc=80.0)[0],
+                              np.array([pan, tilt, f])))
+    cands.sort(key=lambda t: t[0])
+    best = None
+    for _, q in cands[:finalists * 3:3]:
+        r = refine_ptz(pos, q, m, img_w, img_h)
+        if best is None or r[1] < best[1]:
+            best = r
+    return best
 
 
 def pitch_polygon_mask(H: np.ndarray, img_w: int, img_h: int, margin_m: float = 1.0) -> np.ndarray:
@@ -258,8 +340,8 @@ class CalibStage(Stage):
         from .s0_ingest import load_shots
         p = self.params
         every = int(p.get("every_n_frames", 5))
-        max_err = float(p.get("max_err_px", 6.0))
-        min_cov = float(p.get("min_coverage", 0.35))
+        max_err = float(p.get("max_err_px", 3.5))      # mean distance of matched model points
+        min_cov = float(p.get("min_coverage", 0.30))   # fraction of in-view model within 4 px of a line
         shot = next(s for s in load_shots(self.ingest_uri) if s.shot_id == self.shot_id)
         video = Storage.localize(Storage.join(self.ingest_uri, "video.mp4"), ctx.workdir)
         dets = None
@@ -280,37 +362,57 @@ class CalibStage(Stage):
         #    from scratch with multi-start; then propagate forward and backward by refinement.
         n_anchor = int(p.get("anchor_candidates", 3))
         idx = np.linspace(0, len(keyframes) - 1, min(n_anchor, len(keyframes))).round().astype(int)
-        anchors = []
+        min_expl = float(p.get("min_explained", 0.30))
+        ok_fit = lambda r: r[2] >= min_cov and r[3] <= max_err and r[4] >= min_expl   # noqa: E731
+        anchors = []                                                    # (score, k, params, cost, cov, err)
         for k in idx:
-            params, err, cov = fit_frame(masks[k], w_img, h_img, topk=int(p.get("topk", 6)))
-            anchors.append((err, k, params, cov))
-            log.info("calib %s anchor frame %d err %.1f cov %.2f", self.shot_id, keyframes[k], err, cov)
-        log.info("calib %s: propagating from frame %d", self.shot_id, keyframes[sorted(anchors)[0][1]])
+            r = fit_frame(masks[k], w_img, h_img, topk=int(p.get("topk", 60)))
+            anchors.append((r[1], k, r))
+            log.info("calib %s anchor frame %d cost %.1f coverage %.2f explained %.2f err %.1fpx", self.shot_id, keyframes[k], r[1], r[2], r[4], r[3])
         anchors.sort(key=lambda t: t[0])
-        err0, k0, p0, cov0 = anchors[0]
-        sol = {k0: (p0, err0, cov0)}
-        refit_gap = int(p.get("refit_every_keyframes", 20))
+        _, k0, r0 = anchors[0]
+        p0 = r0[0]
+        log.info("calib %s: propagating from frame %d", self.shot_id, keyframes[k0])
+        sol = {k0: r0}
+        refit_gap = int(p.get("refit_every_keyframes", 10))
         for order in (range(k0 + 1, len(keyframes)), range(k0 - 1, -1, -1)):
             prev, last_refit = p0, -10 ** 6
             for k in order:
-                params, err, cov = refine(prev, masks[k], w_img, h_img, iters=1)
-                if err > max_err * 1.5:                     # lost: cheap fallbacks first (other anchors,
-                    alts = [(params, err, cov)]              # all known solutions), full search rarely
-                    for a_ in anchors[1:]:
-                        alts.append(refine(a_[2], masks[k], w_img, h_img, iters=1))
+                r = refine(prev, masks[k], w_img, h_img, iters=1, maxfev=800)
+                if not ok_fit(r):                           # lost: other anchors, then (rarely) a full search
+                    alts = [r] + [refine(a_[2][0], masks[k], w_img, h_img, iters=1, maxfev=800) for a_ in anchors[1:] if ok_fit(a_[2])]
                     if abs(k - last_refit) >= refit_gap:
-                        alts.append(fit_frame(masks[k], w_img, h_img, topk=4)); last_refit = k
-                    params, err, cov = min(alts, key=lambda t: t[1])
-                sol[k] = (params, err, cov)
-                if err <= max_err:
-                    prev = params
+                        alts.append(fit_frame(masks[k], w_img, h_img, topk=30, finalists=3)); last_refit = k
+                    r = min(alts, key=lambda t: t[1])
+                sol[k] = r
+                if ok_fit(r):
+                    prev = r[0]
+        # ---- pass 2: a main broadcast camera does not translate within a shot. Fix its position
+        # to the median of the valid keyframes and refit pan / tilt / zoom everywhere: 3 DOF
+        # instead of 6 is far better conditioned, rescues keyframes lost in pass 1 and removes
+        # position jitter from every downstream metric.
+        good_k = [k for k in sol if ok_fit(sol[k])]
+        n_pass1 = len(good_k)
+        if bool(p.get("fixed_position", True)) and len(good_k) >= 3:
+            pos = np.median(np.stack([sol[k][0][:3] for k in good_k]), 0)
+            for k in range(len(keyframes)):
+                near = min(good_k, key=lambda g: abs(g - k))
+                r = refine_ptz(pos, sol[near][0][3:] if not ok_fit(sol[k]) else sol[k][0][3:], masks[k], w_img, h_img)
+                if not ok_fit(r):
+                    r2 = search_ptz(pos, masks[k], w_img, h_img)
+                    if r2 is not None and r2[1] < r[1]:
+                        r = r2
+                if ok_fit(r) or not ok_fit(sol[k]):
+                    sol[k] = r
+            log.info("calib %s pass 2 (fixed camera at %s): valid %d -> %d / %d", self.shot_id,
+                     np.round(pos, 1).tolist(), n_pass1, sum(ok_fit(sol[k]) for k in sol), len(keyframes))
         rows, n_valid = [], 0
         for k, i in enumerate(keyframes):
-            params, err, cov = sol[k]
-            valid = bool(err <= max_err and cov >= min_cov)
+            params, cost, cov, err, expl = sol[k]
+            valid = bool(ok_fit(sol[k]))
             n_valid += int(valid)
             H = camera_H(params, w_img, h_img)
-            rows.append({"frame": i, "valid": valid, "err_px": round(err, 2), "coverage": round(cov, 3),
+            rows.append({"frame": i, "valid": valid, "err_px": round(err, 2), "coverage": round(cov, 3), "explained": round(expl, 3), "cost": round(cost, 2),
                          **{f"h{k_}": float(v) for k_, v in enumerate(H.ravel())},
                          **{k_: float(v) for k_, v in zip(("cx", "cy", "cz", "pan", "tilt", "f"), params)}})
         df = pd.DataFrame(rows)

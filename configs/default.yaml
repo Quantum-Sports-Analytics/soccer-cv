@@ -18,9 +18,15 @@ detect:                   # stage 3
   tiles: adaptive         # none | adaptive
   person_min_height_px: 14
 
-calib:                    # stages 1-2  (stub until the keypoint model is trained)
-  enabled: false
-  smooth_window: 9
+calib:                    # stages 1-2 — white-line mask + parametric broadcast camera fit (no learned model)
+  enabled: true
+  every_n_frames: 25      # keyframes at 1 Hz; camera parameters interpolated in between
+  max_err_px: 3.5         # mean px distance of matched model points (fit precision)
+  min_coverage: 0.30      # fraction of in-view pitch model within 4 px of a detected line
+  min_explained: 0.30     # fraction of detected line pixels within 4 px of the projected model
+  anchor_candidates: 3    # keyframes fitted from scratch; the best one seeds propagation
+  topk: 60                # grid seeds refined locally in a from-scratch fit
+  refit_every_keyframes: 10
 
 track:                    # stage 4
   max_age: 30             # frames a track survives without a detection

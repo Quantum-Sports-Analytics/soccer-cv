@@ -50,6 +50,95 @@ def _split_gcs(uri: str) -> tuple[str, str]:
     return bucket, key
 
 
+class _XmlBlob:
+    """Tiny subset of google.cloud.storage.Blob over the GCS XML API (virtual-hosted URLs).
+
+    Selected with SCV_GCS_TRANSPORT=xml. Useful where only <bucket>.storage.googleapis.com is
+    reachable (sandboxes, locked-down egress); identical results on Cloud Run / Batch."""
+
+    def __init__(self, api: "_XmlGCS", bucket: str, name: str):
+        self.api, self.bucket, self.name = api, bucket, name
+
+    @property
+    def url(self) -> str:
+        from urllib.parse import quote
+        return f"https://{self.bucket}.storage.googleapis.com/{quote(self.name)}"
+
+    def exists(self) -> bool:
+        return self.api.req("HEAD", self.url).status_code == 200
+
+    def download_as_bytes(self, start: int | None = None, end: int | None = None) -> bytes:
+        h = {"Range": f"bytes={start}-{'' if end is None else end}"} if start is not None else {}
+        r = self.api.req("GET", self.url, headers=h); r.raise_for_status(); return r.content
+
+    def download_to_filename(self, path: str) -> None:
+        with self.api.req("GET", self.url, stream=True) as r:
+            r.raise_for_status()
+            with open(path, "wb") as f:
+                for chunk in r.iter_content(1 << 22):
+                    f.write(chunk)
+
+    def upload_from_string(self, data: bytes, content_type: str = "application/octet-stream") -> None:
+        r = self.api.req("PUT", self.url, data=data, headers={"Content-Type": content_type}); r.raise_for_status()
+
+    def upload_from_filename(self, path: str) -> None:
+        with open(path, "rb") as f:
+            r = self.api.req("PUT", self.url, data=f, headers={"Content-Type": "application/octet-stream"})
+        r.raise_for_status()
+
+    def delete(self) -> None:
+        self.api.req("DELETE", self.url)
+
+    @property
+    def size(self) -> int | None:
+        r = self.api.req("HEAD", self.url)
+        return int(r.headers["Content-Length"]) if r.status_code == 200 else None
+
+
+class _XmlBucket:
+    def __init__(self, api, name):
+        self.api, self.name = api, name
+
+    def blob(self, key):
+        return _XmlBlob(self.api, self.name, key)
+
+
+class _XmlGCS:
+    def __init__(self):
+        import google.auth
+        import google.auth.transport.requests
+        import requests
+        self._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/devstorage.read_write"])
+        self._authreq = google.auth.transport.requests.Request()
+        self._s = requests.Session()
+
+    def _token(self) -> str:
+        if not self._creds.valid:
+            self._creds.refresh(self._authreq)
+        return self._creds.token
+
+    def req(self, method, url, headers=None, **kw):
+        h = {"Authorization": f"Bearer {self._token()}", **(headers or {})}
+        return self._s.request(method, url, headers=h, timeout=kw.pop("timeout", 600), **kw)
+
+    def bucket(self, name):
+        return _XmlBucket(self, name)
+
+    def list_blobs(self, bucket: str, prefix: str = ""):
+        import re
+        from urllib.parse import quote
+        marker = ""
+        while True:
+            url = f"https://{bucket}.storage.googleapis.com/?prefix={quote(prefix)}" + (f"&marker={quote(marker)}" if marker else "")
+            r = self.req("GET", url); r.raise_for_status()
+            keys = re.findall(r"<Key>([^<]+)</Key>", r.text)
+            for k in keys:
+                yield _XmlBlob(self, bucket, k)
+            if "<IsTruncated>true</IsTruncated>" not in r.text or not keys:
+                break
+            marker = keys[-1]
+
+
 class Storage:
     """Minimal read/write over local paths and gs:// URIs."""
 
@@ -58,9 +147,36 @@ class Storage:
     @classmethod
     def _gcs(cls):
         if cls._client is None:
-            from google.cloud import storage  # lazy: not needed locally
-            cls._client = storage.Client()
+            if os.environ.get("SCV_GCS_TRANSPORT", "client") == "xml":
+                cls._client = _XmlGCS()
+            else:
+                from google.cloud import storage  # lazy: not needed locally
+                cls._client = storage.Client()
         return cls._client
+
+    @classmethod
+    def read_range(cls, uri: str, start: int, end: int | None) -> bytes:
+        """Byte range [start, end] inclusive (end=None: to EOF). Used for video streaming."""
+        if is_gcs(uri):
+            b, k = _split_gcs(uri)
+            blob = cls._gcs().bucket(b).blob(k)
+            if isinstance(blob, _XmlBlob):
+                return blob.download_as_bytes(start, end)
+            return blob.download_as_bytes(start=start, end=end)
+        with open(uri, "rb") as f:
+            f.seek(start)
+            return f.read() if end is None else f.read(end - start + 1)
+
+    @classmethod
+    def size(cls, uri: str) -> int | None:
+        if is_gcs(uri):
+            b, k = _split_gcs(uri)
+            blob = cls._gcs().bucket(b).blob(k)
+            if isinstance(blob, _XmlBlob):
+                return blob.size
+            blob = cls._gcs().bucket(b).get_blob(k)
+            return blob.size if blob else None
+        return Path(uri).stat().st_size if Path(uri).exists() else None
 
     @staticmethod
     def join(base: str, *parts: str) -> str:

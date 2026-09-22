@@ -1,4 +1,4 @@
-# Tier B + C + demo: CPU only (identity resolution, fusion, render, web app).
+# Demo platform (Cloud Run) + Tier B/C on CPU. Submits GPU work to Cloud Batch; never runs a GPU itself.
 FROM python:3.11-slim
 ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 && \
@@ -7,6 +7,9 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY soccer_cv ./soccer_cv
 COPY configs ./configs
-RUN pip install ".[gcp,demo]"
+# editable install: the platform publishes /app/soccer_cv + /app/configs as the per-job code overlay
+RUN pip install -e ".[gcp,demo]" requests
+ENV RUNS_URI=gs://soccer-cv/runs BACKEND=batch GCP_PROJECT=quantum-analytics-495309 GCP_REGION=europe-west1 \
+    SCV_CONFIG=/app/configs/gpu_l4.yaml UPLOAD_DIR=/tmp
 EXPOSE 8080
-CMD ["uvicorn", "soccer_cv.demo.app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "uvicorn soccer_cv.demo.app:app --host 0.0.0.0 --port ${PORT:-8080}"]
