@@ -37,6 +37,10 @@ class SummarizeStage(Stage):
             reid = Storage.read_df(ctx.inp("track_reid.parquet")).set_index("track_id")
         if "swap_conf" not in tracks:
             tracks["swap_conf"] = 1.0
+        splits = {}
+        if Storage.exists(ctx.inp("splits.json")):
+            for d in Storage.read_json(ctx.inp("splits.json")):
+                splits[int(d["track_id"])] = d
         H = None
         if self.calib_uri and Storage.exists(Storage.join(self.calib_uri, "calib.parquet")):
             H = Storage.read_df(Storage.join(self.calib_uri, "calib.parquet")).set_index("frame")
@@ -59,6 +63,7 @@ class SummarizeStage(Stage):
                 "jersey_votes": json.dumps({}), "team_cluster": None,
                 "reid_embedding": (reid.loc[tid, "reid"] if reid is not None and tid in reid.index else None),
                 "min_swap_conf": float(g.swap_conf.min()),
+                "split_candidates": json.dumps(splits[int(tid)]["candidates"]) if int(tid) in splits else None,
                 "mean_margin": float(g.margin.mean()), "frac_occluded": float((g.occl > 0.3).mean()),
                 "mean_height_px": float((g.y2 - g.y1).mean()),
             }

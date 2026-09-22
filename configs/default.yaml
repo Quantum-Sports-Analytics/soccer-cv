@@ -59,6 +59,7 @@ identity:                 # stages 8-10
   link_max_gap_frames: 750      # 30 s at 25 fps
   link_appearance_threshold: 0.45
   abstain_below: 0.55           # CSIS-style: report unknown below this belief
+  split_link_margin: 0.15        # x0.2 = min ReID cosine gap between candidates to re-link a split segment
 
 ball3d:                   # stage 11
   enabled: false

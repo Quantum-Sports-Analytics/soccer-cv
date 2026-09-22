@@ -171,7 +171,7 @@ def resolve_window(w: dict, tr: pd.DataFrame, tid: np.ndarray, frames: np.ndarra
             if ((tid == t) & (frames > f1)).any():
                 relabels.append((t, tmp_base + k, f1 + 1))
         rec = {**w, "decision": "split", "margin": round(float(margin), 4), "app_best": round(app_best, 4),
-               "pre": pre_ids, "post": post_ids, "births": births,
+               "pre": pre_ids, "post": post_ids, "births": births, "split_new_ids": [tmp_base + k for k in range(2)],
                "assignment": [(int(pre_ids[r]), int(post_ids[c])) for r, c in zip(r_idx, c_idx)]}
         return {"record": rec, "relabels": relabels, "participants": [a, b] + births, "conf": 0.3}
     if not identity:
@@ -301,6 +301,16 @@ class ReIDStage(Stage):
                                 "emb": [json.dumps(np.round(e, 4).tolist()) for e in emb.emb]})
         Storage.write_df(ctx.out("track_emb.parquet"), emb_out)
         Storage.write_json(ctx.out("windows.json"), decisions)
+        # split boundaries for Tier B: which new ids were born from an undecidable window, and the
+        # pre-window candidates they could belong to (Tier B must decide on appearance only)
+        splits = []
+        for d in decisions:
+            if d["decision"] == "split":
+                cands = [int(x) for x in d["pre"]] + [int(x) for x in d.get("births", [])]
+                for nid in d["split_new_ids"] + [int(x) for x in d.get("births", [])]:
+                    if (tid == nid).any():
+                        splits.append({"track_id": int(nid), "split_frame": int(d["f1"]) + 1, "candidates": cands})
+        Storage.write_json(ctx.out("splits.json"), splits)
         # track-level mean ReID embedding for Tier B linking
         means = []
         for t, g in emb.groupby("track_id"):

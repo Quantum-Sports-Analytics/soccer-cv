@@ -96,17 +96,43 @@ class IdentityTier(Stage):
         tl["team"] = teams
 
         # ---- stage 8: graph
+        split_cands = {}
+        if "split_candidates" in tl:
+            for i, sc in enumerate(tl.split_candidates):
+                if isinstance(sc, str):
+                    split_cands[i] = set(json.loads(sc))
+        key_of = {(r.shot_id, int(r.track_id)): i for i, r in tl.iterrows()}
         G = nx.DiGraph()
         for i in range(len(tl)):
             G.add_node(i)
-        for i in range(len(tl)):
-            a = tl.iloc[i]
-            for j in range(i + 1, len(tl)):
-                b = tl.iloc[j]
-                if b.start_frame <= a.end_frame or teams[i] != teams[j]:
+        link_margin = float(p.get("split_link_margin", 0.15))
+        n_split_abstain = 0
+        for j in range(len(tl)):
+            b = tl.iloc[j]
+            if j in split_cands:
+                # born from an undecidable crossing: position is uninformative by construction.
+                # Link only if appearance clearly prefers one pre-window candidate.
+                cands = [key_of[(b.shot_id, t)] for t in split_cands[j] if (b.shot_id, t) in key_of]
+                cands = [i for i in cands if tl.iloc[i].end_frame < b.start_frame]
+                scores = []
+                for i in cands:
+                    if reid[i] is None or reid[j] is None:
+                        continue
+                    scores.append((float(reid[i] @ reid[j]), i))
+                scores.sort(reverse=True)
+                if len(scores) >= 2 and scores[0][0] - scores[1][0] < link_margin * 0.2:
+                    n_split_abstain += 1
+                    continue                     # stays its own identity, flagged uncertain
+                if scores:
+                    cos, i = scores[0]
+                    G.add_edge(i, j, belief=float(np.clip((cos - 0.75) / 0.17, 0.56, 1.0)))
+                continue
+            for i in range(j):
+                a = tl.iloc[i]
+                if a.end_frame >= b.start_frame or teams[i] != teams[j]:
                     continue
                 if b.start_frame - a.end_frame > int(p.get("link_max_gap_frames", 750)):
-                    break
+                    continue
                 bel = _link_belief(a, b, emb[i], emb[j], p, reid[i], reid[j])
                 if bel > 0:
                     G.add_edge(i, j, belief=bel)
@@ -134,6 +160,9 @@ class IdentityTier(Stage):
         # abstain: short, unlinked tracklets are reported as unknown rather than a new player
         abst = np.array([(identity[i] not in identity[np.arange(len(tl)) != i]) and tl.n_frames.iloc[i] < 15
                          for i in range(len(tl))])
+        for j in split_cands:
+            if j not in pred:                      # unresolved split: uncertain identity
+                conf[j] = min(conf[j], 0.3)
         tl["identity_id"] = identity; tl["confidence"] = conf; tl["abstained"] = abst
 
         # ---- cardinality: <= max_per_team visible per frame per team
@@ -179,7 +208,7 @@ class IdentityTier(Stage):
         Storage.write_json(ctx.out("identity_graph.json"),
                            {"edges": [(int(i), int(j), round(b, 3)) for i, j, b in used_edges], "clusters": cinfo})
         n_reentry = len(used_edges)
-        return {"n_tracklets": len(tl), "n_identities": int(next_id - 1),
+        return {"n_tracklets": len(tl), "n_identities": int(next_id - 1), "split_abstain": n_split_abstain,
                 "n_relinks": n_reentry, "n_abstained": int(tl.abstained.sum()),
                 "cardinality_violations_frames": n_card_viol,
                 "team_sizes": tl[~tl.abstained].groupby("team").identity_id.nunique().to_dict()}
