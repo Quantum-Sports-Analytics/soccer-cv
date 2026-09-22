@@ -9,7 +9,7 @@ COPY soccer_cv ./soccer_cv
 COPY configs ./configs
 # editable install: the platform publishes /app/soccer_cv + /app/configs as the per-job code overlay
 RUN pip install -e ".[gcp,demo]" requests
-ENV RUNS_URI=gs://soccer-cv/runs BACKEND=batch GCP_PROJECT=quantum-analytics-495309 GCP_REGION=europe-west1 \
+ENV RUNS_URI=gs://soccer-cv/runs BACKEND=cloudrun GCP_PROJECT=quantum-analytics-495309 GCP_REGION=europe-west1 \
     SCV_CONFIG=/app/configs/gpu_l4.yaml UPLOAD_DIR=/tmp
 EXPOSE 8080
 CMD ["sh", "-c", "uvicorn soccer_cv.demo.app:app --host 0.0.0.0 --port ${PORT:-8080}"]

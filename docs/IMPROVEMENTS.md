@@ -82,3 +82,15 @@ ajustés en regardant ce clip et doivent être confrontés à d'autres condition
 1. Lancer chaque nouvelle vidéo depuis la plateforme ; lire d'abord les métriques (calibration, fenêtres, abstentions), puis l'overlay.
 2. Classer chaque défaut observé dans une ligne ci-dessus (ou en ajouter une).
 3. Ne pas régler un seuil sur une vidéo : chercher le changement qui améliore toutes les vidéos vues jusqu'ici — les runs sont rejouables en secondes à partir des détections sauvegardées.
+
+
+## Mesuré sur GPU (22/09, L4 Cloud Run, clip 40 s)
+
+- **P0 — Calibration = 356 s pour 40 s de vidéo (×8,9), goulot unique.** CPU pur (chamfer + Powell).
+  Leviers : (a) une image clé toutes les 2 s au lieu de 1 s avec la passe 2 à position fixe (3 DOF),
+  (b) paralléliser les images clés sur les 8 vCPU de la tâche, (c) grille grossière vectorisée en numpy / GPU,
+  (d) à terme un modèle de points clés appris. *Terminé quand* : calibration ≤ ×1 la durée vidéo.
+- **P1 — Démarrage à froid 80-270 s par job.** Image de ~10 Go. Leviers : image plus légère, streaming d'image
+  Artifact Registry, ou un job par match plutôt que par vidéo courte.
+- **P2 — Image GPU avec torch 2.6 (index cu124)** ; import de rfdetr plante sans `PYTORCH_JIT=0`.
+  Dockerfile passé à cu128 ; à reconstruire et revalider.

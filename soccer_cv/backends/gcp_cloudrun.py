@@ -30,6 +30,18 @@ from .base import Backend, ShotTask
 
 log = logging.getLogger(__name__)
 
+
+def _retry(fn, *a, tries: int = 8, wait_s: float = 5.0, what: str = "call", **kw):
+    """Retry transient network / 5xx errors (a dropped proxy connection must not orphan a GPU job)."""
+    for k in range(tries):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:                             # noqa: BLE001
+            if k == tries - 1 or getattr(e, "code", None) in (400, 401, 403, 404):
+                raise
+            log.warning("%s failed (%s), retry %d/%d", what, type(e).__name__, k + 1, tries - 1)
+            time.sleep(wait_s * (k + 1))
+
 TIER_A_CMD = ('IFS="," read -ra SHOTS <<< "$SHOT_LIST"; '
               '{prefix}soccer-cv tier-a --run-uri "$RUN_URI" --shot-id "${{SHOTS[$CLOUD_RUN_TASK_INDEX]}}" '
               '--config "$CONFIG_URI"')
@@ -137,7 +149,7 @@ class CloudRunJobsBackend(Backend):
             if exec_name is None:                              # fall back to the job's latest execution
                 exec_name = jobs.get_job(name=job_name).latest_created_execution.name
             while True:
-                ex = executions.get_execution(name=exec_name)
+                ex = _retry(executions.get_execution, name=exec_name, what="get_execution")
                 done = bool(ex.completion_time)
                 log.info("cloudrun %s: running %d succeeded %d failed %d (%.0fs)", job_id, ex.running_count,
                          ex.succeeded_count, ex.failed_count, time.time() - t0)
@@ -146,7 +158,7 @@ class CloudRunJobsBackend(Backend):
                     break
                 time.sleep(self.poll_s)
             try:
-                for t in task_client.list_tasks(parent=exec_name):
+                for t in _retry(lambda: list(task_client.list_tasks(parent=exec_name)), what="list_tasks"):
                     ok = any(c.type_ == "Completed" and c.state.name == "CONDITION_SUCCEEDED" for c in t.conditions)
                     per_task[int(t.index)] = ok
             except Exception as e:                             # noqa: BLE001 — per-task detail is best effort
@@ -155,14 +167,14 @@ class CloudRunJobsBackend(Backend):
             state = "CANCELLED"
             if exec_name:
                 try:
-                    executions.cancel_execution(name=exec_name)
+                    _retry(executions.cancel_execution, name=exec_name, what="cancel_execution", tries=4)
                 except Exception:                              # noqa: BLE001
                     pass
             raise
         finally:
             if not self.keep_job:
                 try:
-                    jobs.delete_job(name=job_name)
+                    _retry(jobs.delete_job, name=job_name, what="delete_job")
                     log.info("deleted Cloud Run job %s", job_name)
                 except Exception as e:                         # noqa: BLE001
                     log.warning("could not delete job %s: %s", job_name, e)

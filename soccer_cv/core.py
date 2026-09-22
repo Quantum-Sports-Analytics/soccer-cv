@@ -28,6 +28,9 @@ log = logging.getLogger("soccer_cv")
 
 # ------------------------------------------------------------------ config
 def load_config(path: str | Path) -> dict:
+    """Local path or gs:// URI (Storage is defined later in this module; resolved at call time)."""
+    if str(path).startswith("gs://"):
+        return yaml.safe_load(Storage.read_bytes(str(path)).decode())
     with open(path) as f:
         return yaml.safe_load(f)
 

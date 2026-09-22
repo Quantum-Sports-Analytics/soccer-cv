@@ -32,7 +32,7 @@ gcloud run deploy soccer-cv-demo \
   --no-allow-unauthenticated
 ```
 
-`BACKEND=batch` (the image default) submits one whole-video Batch job instead.
+`BACKEND=cloudrun` is the image default; `BACKEND=batch` submits one whole-video Batch job instead.
 
 `--max-instances 1 --session-affinity`: upload chunks are assembled on the instance's
 disk, so all chunks of one upload must reach the same instance. Fine for a demo; the

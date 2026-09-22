@@ -1,0 +1,14 @@
+# Builds ONLY the demo platform image (tier-bc). The GPU image (tier-a) is left untouched.
+# gcloud builds submit --config deploy/cloudbuild_platform.yaml
+substitutions:
+  _REGION: europe-west1
+  _REPO: soccer-cv
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "deploy/docker/Dockerfile.tier_bc",
+           "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/tier-bc:latest", "."]
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/tier-bc:latest"
+options:
+  machineType: E2_HIGHCPU_8
+timeout: 1800s
