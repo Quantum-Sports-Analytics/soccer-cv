@@ -281,6 +281,21 @@ class ReIDStage(Stage):
 
         tr["track_id"] = tid
         emb["track_id"] = emb_tid
+        # colour signatures (team cue) for ids created by relabelling: inherit from the raw parent
+        if Storage.exists(ctx.inp("track_app.parquet")):
+            app = Storage.read_df(ctx.inp("track_app.parquet"))
+            have = set(app.track_id.tolist()); rows_app = []
+            for new_id in np.unique(tid):
+                if new_id in have:
+                    continue
+                parents = pd.Series(raw[tid == new_id]).value_counts()
+                parent = int(parents.index[0])
+                if parent in have:
+                    r = app[app.track_id == parent].iloc[0].to_dict(); r["track_id"] = int(new_id)
+                    r["n_frames"] = int((tid == new_id).sum()); rows_app.append(r)
+            if rows_app:
+                app = pd.concat([app, pd.DataFrame(rows_app)], ignore_index=True)
+            Storage.write_df(ctx.out("track_app.parquet"), app)
         Storage.write_df(ctx.out("tracks.parquet"), tr)
         emb_out = pd.DataFrame({"frame": emb.frame, "track_id": emb.track_id,
                                 "emb": [json.dumps(np.round(e, 4).tolist()) for e in emb.emb]})

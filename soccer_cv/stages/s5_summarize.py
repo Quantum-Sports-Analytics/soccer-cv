@@ -30,7 +30,7 @@ class SummarizeStage(Stage):
 
     def run(self, ctx: StageContext) -> dict:
         tracks = Storage.read_df(ctx.inp("tracks.parquet"))
-        app_src = self.app_uri or ctx.input_uri
+        app_src = ctx.input_uri if Storage.exists(ctx.inp("track_app.parquet")) else (self.app_uri or ctx.input_uri)
         app = Storage.read_df(Storage.join(app_src, "track_app.parquet")).set_index("track_id")
         reid = None
         if Storage.exists(ctx.inp("track_reid.parquet")):
