@@ -50,25 +50,26 @@ def cluster_teams(emb: np.ndarray, weights: np.ndarray, k: int = 2, seed: int = 
     if len(emb) < k:
         return np.zeros(len(emb), dtype=int), {}
     w = np.maximum(weights, 1e-3)
-    # k team clusters first; officials are then the *outliers* of their cluster
-    # (distance to centroid far above the cluster's typical spread), not a third
-    # k-means group — a third group over-splits a team when tracklets are few.
-    km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(emb, sample_weight=w)
-    labels = km.labels_.copy()
-    dist = 0.5 * np.abs(emb - km.cluster_centers_[labels]).sum(1)
-    out = labels.copy()
-    for c in range(k):
-        m = labels == c
-        if m.sum() < 3:
-            continue
-        med = np.median(dist[m]); mad = np.median(np.abs(dist[m] - med)) + 1e-6
-        outl = m & (dist > med + 4.0 * mad) & (dist > 0.25)
-        out[outl] = k
-    mass = np.array([w[out == c].sum() for c in range(k + 1)])
-    order = np.argsort(-mass[:k])            # team 0 = heavier cluster (more tracklet-frames)
-    remap = {int(order[i]): i for i in range(k)}
-    out = np.array([remap.get(int(l), k) if l < k else k for l in out])
-    info = {"cluster_mass": mass.round(1).tolist(), "n_officials": int((out == k).sum())}
+    # k+1 groups: the two heaviest (by tracklet-frames) are the teams, the light
+    # remainder is officials / goalkeepers. If the extra group is not clearly
+    # lighter than the teams (short clip, few tracklets) it would be splitting a
+    # team, so fall back to k groups and no officials.
+    out = None
+    if len(emb) >= k + 2:
+        km = KMeans(n_clusters=k + 1, n_init=10, random_state=seed).fit(emb, sample_weight=w)
+        mass = np.array([w[km.labels_ == c].sum() for c in range(k + 1)])
+        order = np.argsort(-mass)
+        if mass[order[-1]] < 0.4 * mass[order[k - 1]]:
+            remap = {int(order[i]): i for i in range(k)}
+            out = np.array([remap.get(int(l), k) for l in km.labels_])
+    if out is None:
+        km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(emb, sample_weight=w)
+        mass = np.array([w[km.labels_ == c].sum() for c in range(k)])
+        order = np.argsort(-mass)
+        remap = {int(order[i]): i for i in range(k)}
+        out = np.array([remap[int(l)] for l in km.labels_])
+    info = {"cluster_mass": [round(float(w[out == c].sum()), 1) for c in range(k + 1)],
+            "n_officials": int((out == k).sum())}
     return out, info
 
 

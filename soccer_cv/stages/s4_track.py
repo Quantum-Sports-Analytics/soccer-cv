@@ -74,7 +74,12 @@ def torso_hist(frame: np.ndarray, box, band=(0.15, 0.55), bins=(8, 4, 4)) -> np.
     if x2 - x1 < 2 or y2b - y1b < 2:
         return np.zeros(int(np.prod(bins)), dtype=np.float32)
     crop = cv2.cvtColor(frame[y1b:y2b, x1:x2], cv2.COLOR_BGR2HSV)
-    hist = cv2.calcHist([crop], [0, 1, 2], None, list(bins), [0, 180, 0, 256, 0, 256]).flatten()
+    # exclude pitch pixels (green hue) so the signature is the shirt, not the background
+    grass = cv2.inRange(crop, (35, 40, 40), (85, 255, 255))
+    mask = cv2.bitwise_not(grass)
+    if cv2.countNonZero(mask) < 8:
+        mask = None
+    hist = cv2.calcHist([crop], [0, 1, 2], mask, list(bins), [0, 180, 0, 256, 0, 256]).flatten()
     return (hist / max(hist.sum(), 1e-9)).astype(np.float32)
 
 
