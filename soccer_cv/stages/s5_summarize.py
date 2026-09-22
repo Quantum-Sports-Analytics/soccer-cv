@@ -64,6 +64,7 @@ class SummarizeStage(Stage):
                 "reid_embedding": (reid.loc[tid, "reid"] if reid is not None and tid in reid.index else None),
                 "min_swap_conf": float(g.swap_conf.min()),
                 "split_candidates": json.dumps(splits[int(tid)]["candidates"]) if int(tid) in splits else None,
+                "split_frame": int(splits[int(tid)]["split_frame"]) if int(tid) in splits else -1,
                 "mean_margin": float(g.margin.mean()), "frac_occluded": float((g.occl > 0.3).mean()),
                 "mean_height_px": float((g.y2 - g.y1).mean()),
             }

@@ -96,7 +96,7 @@ class IdentityTier(Stage):
         tl["team"] = teams
 
         # ---- stage 8: graph
-        split_cands = {}
+        split_cands: dict[int, set[int]] = {}
         if "split_candidates" in tl:
             for i, sc in enumerate(tl.split_candidates):
                 if isinstance(sc, str):
@@ -105,31 +105,14 @@ class IdentityTier(Stage):
         G = nx.DiGraph()
         for i in range(len(tl)):
             G.add_node(i)
-        link_margin = float(p.get("split_link_margin", 0.15))
         n_split_abstain = 0
         for j in range(len(tl)):
-            b = tl.iloc[j]
             if j in split_cands:
-                # born from an undecidable crossing: position is uninformative by construction.
-                # Link only if appearance clearly prefers one pre-window candidate.
-                cands = [key_of[(b.shot_id, t)] for t in split_cands[j] if (b.shot_id, t) in key_of]
-                cands = [i for i in cands if tl.iloc[i].end_frame < b.start_frame]
-                scores = []
-                for i in cands:
-                    if reid[i] is None or reid[j] is None:
-                        continue
-                    scores.append((float(reid[i] @ reid[j]), i))
-                scores.sort(reverse=True)
-                if len(scores) >= 2 and scores[0][0] - scores[1][0] < link_margin * 0.2:
-                    n_split_abstain += 1
-                    continue                     # stays its own identity, flagged uncertain
-                if scores:
-                    cos, i = scores[0]
-                    G.add_edge(i, j, belief=float(np.clip((cos - 0.75) / 0.17, 0.56, 1.0)))
-                continue
+                continue                                  # handled jointly below
+            b = tl.iloc[j]
             for i in range(j):
                 a = tl.iloc[i]
-                if a.end_frame >= b.start_frame or teams[i] != teams[j]:
+                if i in split_cands or a.end_frame >= b.start_frame or teams[i] != teams[j]:
                     continue
                 if b.start_frame - a.end_frame > int(p.get("link_max_gap_frames", 750)):
                     continue
@@ -137,10 +120,84 @@ class IdentityTier(Stage):
                 if bel > 0:
                     G.add_edge(i, j, belief=bel)
 
+        # ---- stage 8b: segments born from undecidable crossings, resolved as JOINT assignments.
+        # Group = same shot, same candidate set. Each candidate track is followed to the root of
+        # its chain-so-far, and the identity's anchor embedding is the crop-weighted mean of every
+        # segment already attributed to it — so evidence accumulates across successive crossings.
+        # Hungarian assignment of the group's segments to the candidate identities; accepted only
+        # if it beats the runner-up assignment by `split_link_margin`. Otherwise every segment of
+        # the group stays a new, low-confidence identity (better unknown than wrong).
+        from scipy.optimize import linear_sum_assignment
+        split_margin = float(p.get("split_link_margin", 0.03))
+        n_crops = tl.n_frames.to_numpy(dtype=float)
+        split_links: list[tuple[int, int, float]] = []       # (pred, succ, belief)
+        chain_pred: dict[int, int] = {}                       # provisional predecessor map for anchors
+        groups: dict[tuple, list[int]] = {}
+        split_frame = tl.split_frame.to_numpy() if "split_frame" in tl else np.full(len(tl), -1)
+        for j, cands in split_cands.items():
+            groups.setdefault((tl.shot_id.iloc[j], int(split_frame[j]), tuple(sorted(cands))), []).append(j)
+
+        def root(i):
+            while i in chain_pred:
+                i = chain_pred[i]
+            return i
+
+        def members(r):
+            out = [r]; changed = True
+            while changed:
+                changed = False
+                for a_, b_ in chain_pred.items():
+                    if b_ in out and a_ not in out:
+                        out.append(a_); changed = True
+            return out
+
+        for (shot, sf, cands), segs in sorted(groups.items(), key=lambda kv: kv[0][1]):
+            segs = sorted(segs, key=lambda j: tl.start_frame.iloc[j])
+            seg_tids = {int(tl.track_id.iloc[j]) for j in segs}
+            # candidates = pre-window tracks; a track born inside the window is a segment, not an anchor
+            cand_idx = [key_of[(shot, t)] for t in cands if (shot, t) in key_of and t not in seg_tids]
+            cand_idx = [i for i in cand_idx if tl.end_frame.iloc[i] <= sf and reid[i] is not None]
+            # one anchor per distinct identity root among the candidates
+            roots = {}
+            for i in cand_idx:
+                roots.setdefault(root(i), []).append(i)
+            anchors = []
+            for r, _ in roots.items():
+                mem = [m for m in members(r) if reid[m] is not None]
+                v = sum(reid[m] * n_crops[m] for m in mem); v = v / (np.linalg.norm(v) + 1e-9)
+                anchors.append((r, v))
+            segs_ok = [j for j in segs if reid[j] is not None]
+            if len(anchors) == 0 or len(segs_ok) == 0:
+                n_split_abstain += len(segs); continue
+            S = np.array([[float(reid[j] @ v) for _, v in anchors] for j in segs_ok])
+            r_idx, c_idx = linear_sum_assignment(-S)
+            best = float(S[r_idx, c_idx].sum())
+            second = -np.inf
+            for r, c in zip(r_idx, c_idx):
+                S2 = S.copy(); S2[r, c] = -1e3
+                rr, cc = linear_sum_assignment(-S2); second = max(second, float(S2[rr, cc].sum()))
+            margin = best - second if np.isfinite(second) else 1.0
+            if margin < split_margin:
+                n_split_abstain += len(segs); continue
+            for r, c in zip(r_idx, c_idx):
+                j = segs_ok[r]; root_i = anchors[c][0]
+                # link to the LAST segment of that identity's chain that ends before j starts
+                chain = [m for m in members(root_i) if tl.end_frame.iloc[m] <= sf]
+                if not chain:
+                    continue
+                i = max(chain, key=lambda m: tl.end_frame.iloc[m])
+                bel = float(np.clip(0.6 + margin * 4.0, 0.6, 0.98))
+                split_links.append((i, j, bel)); chain_pred[j] = i
+        for i, j, bel in split_links:
+            G.add_edge(i, j, belief=bel, split=True)
+
         # ---- stage 10: greedy chaining by descending belief, one successor / one predecessor
         edges = sorted(G.edges(data=True), key=lambda e: -e[2]["belief"])
         succ, pred, used_edges = {}, {}, []
         abstain = float(p.get("abstain_below", 0.55))
+        for i, j, bel in split_links:                    # committed first: they carry the crossing evidence
+            if i not in succ and j not in pred:
+                succ[i] = j; pred[j] = i; used_edges.append((i, j, bel))
         for i, j, d in edges:
             if i in succ or j in pred or d["belief"] < abstain:
                 continue
