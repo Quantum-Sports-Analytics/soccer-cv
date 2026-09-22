@@ -31,6 +31,10 @@ track:                    # stage 4
   occlusion_correct: true # OA-SORT style positional-cost correction
   cmc: conditional        # off | conditional | always
   margin_low: 0.15        # assignment margin below which a window is "ambiguous"
+  team_gate: true         # forbid associating a track to a confident other-team detection
+  team_ratio: 0.7         # detection is "confidently team i" if d_i < ratio * d_j
+  team_refit_every: 100   # frames between refits of the online team model
+  pitch_filter: true      # reject detections whose feet are off the grass mask
 
 reid:                     # stage 5
   every_n_frames: 5

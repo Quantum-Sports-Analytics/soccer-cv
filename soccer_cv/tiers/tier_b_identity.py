@@ -33,7 +33,7 @@ import logging
 import networkx as nx
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from ..teams import cluster_teams
 
 from ..core import Stage, StageContext, Storage
 from ..schema import IDENTITY_COLUMNS, ROSTER_COLUMNS, RosterState
@@ -43,34 +43,6 @@ log = logging.getLogger(__name__)
 
 def _hist_dist(a: np.ndarray, b: np.ndarray) -> float:
     return float(0.5 * np.abs(a - b).sum())
-
-
-def cluster_teams(emb: np.ndarray, weights: np.ndarray, k: int = 2, seed: int = 0) -> tuple[np.ndarray, dict]:
-    """Return cluster label per tracklet: 0..k-1 = teams, k = officials/other."""
-    if len(emb) < k:
-        return np.zeros(len(emb), dtype=int), {}
-    w = np.maximum(weights, 1e-3)
-    # k+1 groups: the two heaviest (by tracklet-frames) are the teams, the light
-    # remainder is officials / goalkeepers. If the extra group is not clearly
-    # lighter than the teams (short clip, few tracklets) it would be splitting a
-    # team, so fall back to k groups and no officials.
-    out = None
-    if len(emb) >= k + 2:
-        km = KMeans(n_clusters=k + 1, n_init=10, random_state=seed).fit(emb, sample_weight=w)
-        mass = np.array([w[km.labels_ == c].sum() for c in range(k + 1)])
-        order = np.argsort(-mass)
-        if mass[order[-1]] < 0.4 * mass[order[k - 1]]:
-            remap = {int(order[i]): i for i in range(k)}
-            out = np.array([remap.get(int(l), k) for l in km.labels_])
-    if out is None:
-        km = KMeans(n_clusters=k, n_init=10, random_state=seed).fit(emb, sample_weight=w)
-        mass = np.array([w[km.labels_ == c].sum() for c in range(k)])
-        order = np.argsort(-mass)
-        remap = {int(order[i]): i for i in range(k)}
-        out = np.array([remap[int(l)] for l in km.labels_])
-    info = {"cluster_mass": [round(float(w[out == c].sum()), 1) for c in range(k + 1)],
-            "n_officials": int((out == k).sum())}
-    return out, info
 
 
 def _link_belief(a: pd.Series, b: pd.Series, ea: np.ndarray, eb: np.ndarray, p: dict) -> float:

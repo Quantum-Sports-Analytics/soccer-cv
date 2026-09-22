@@ -24,6 +24,10 @@ track:
   occlusion_correct: true
   cmc: conditional
   margin_low: 0.15
+  team_gate: true
+  team_ratio: 0.7
+  team_refit_every: 100
+  pitch_filter: true
 reid:
   every_n_frames: 5
   embed_dim: 128

@@ -32,6 +32,7 @@ from scipy.optimize import linear_sum_assignment
 
 from ..core import Stage, StageContext, Storage, frames_iter
 from ..schema import TRACK_COLUMNS, ObjClass
+from ..teams import OnlineTeamModel, pitch_mask, feet_on_pitch
 
 log = logging.getLogger(__name__)
 
@@ -106,6 +107,20 @@ class Track:
         self.hits = 1; self.age = 0; self.time_since_update = 0
         self.last_margin = 1.0; self.last_occl = occl
         self.history: list[tuple[int, np.ndarray, float, float, float]] = []
+        self.team_votes = np.zeros(2)
+
+    @property
+    def team(self) -> int:
+        """0/1 when one team has a clear majority of confident votes, else -1."""
+        v = self.team_votes
+        if v.sum() < 3:
+            return -1
+        i = int(v.argmax())
+        return i if v[i] >= 0.75 * v.sum() else -1
+
+    def vote(self, team: int, occl: float):
+        if team >= 0 and occl < 0.4:
+            self.team_votes[team] += 1
 
     @staticmethod
     def _to_z(box):
@@ -136,7 +151,7 @@ class Track:
 
 # ------------------------------------------------------------ association
 def associate(tracks: list[Track], dets: np.ndarray, embs: np.ndarray, occl: np.ndarray,
-              p: dict) -> tuple[list[tuple[int, int, float]], list[int], list[int]]:
+              p: dict, det_team: np.ndarray | None = None) -> tuple[list[tuple[int, int, float]], list[int], list[int]]:
     if len(tracks) == 0 or len(dets) == 0:
         return [], list(range(len(tracks))), list(range(len(dets)))
     tboxes = np.stack([t.box for t in tracks])
@@ -152,6 +167,11 @@ def associate(tracks: list[Track], dets: np.ndarray, embs: np.ndarray, occl: np.
     aw_eff = aw * (1 + occl[None, :])          # trust appearance more when occluded
     cost = (1 - aw_eff) * pos_cost + aw_eff * app_cost
     cost[iou < 1e-3] = 1e3                      # gate: no spatial overlap at all
+    if det_team is not None and p.get("team_gate", True):
+        # a track with a settled team may not take a detection confidently of the other team
+        tt = np.array([t.team for t in tracks])
+        forbid = (tt[:, None] >= 0) & (det_team[None, :] >= 0) & (tt[:, None] != det_team[None, :])
+        cost[forbid] = 1e3
     r, c = linear_sum_assignment(cost)
     matches, ut, ud = [], set(range(len(tracks))), set(range(len(dets)))
     thr = 1.0 - float(p.get("iou_threshold", 0.25))
@@ -194,34 +214,45 @@ class TrackStage(Stage):
         hi_thr = float(self.cfg.get("detect", {}).get("score_threshold", 0.35)) + 0.15
         max_age, min_hits = int(p.get("max_age", 30)), int(p.get("min_hits", 3))
         n_switch_risk = 0
+        team_model = OnlineTeamModel(ratio=float(p.get("team_ratio", 0.7)))
+        refit_every = int(p.get("team_refit_every", 100))
+        use_pitch = bool(p.get("pitch_filter", True))
+        n_off_pitch = 0
 
         for i, frame in frames_iter(video, shot.start_frame, shot.end_frame):
             g = by_frame.get(i)
             d = g[["x1", "y1", "x2", "y2", "score"]].to_numpy(dtype=float) if g is not None else np.zeros((0, 5))
+            if use_pitch and len(d):
+                keep = feet_on_pitch(pitch_mask(frame), d[:, :4])
+                n_off_pitch += int((~keep).sum()); d = d[keep]
             for t in tracks:
                 t.predict()
             occl = occlusion_estimate(d[:, :4]) if len(d) else np.zeros(0)
             embs = np.stack([torso_hist(frame, b, band) for b in d[:, :4]]) if len(d) else np.zeros((0, 128))
+            if (i - shot.start_frame) % refit_every == refit_every - 1 or (not team_model.ready and len(tracks) >= 12):
+                cand = [t for t in tracks if t.hits >= 10]
+                team_model.fit([t.emb for t in cand], [t.emb_w for t in cand])
+            det_team = np.array([team_model.assign(e) for e in embs]) if len(d) else np.zeros(0, dtype=int)
 
             hi = np.where(d[:, 4] >= hi_thr)[0]; lo = np.where(d[:, 4] < hi_thr)[0]
-            m1, ut, _ = associate(tracks, d[hi], embs[hi], occl[hi], p)
+            m1, ut, _ = associate(tracks, d[hi], embs[hi], occl[hi], p, det_team[hi])
             matched_d = set()
             for ti, dj, mg in m1:
-                j = hi[dj]; tracks[ti].update(d[j, :4], d[j, 4], embs[j], occl[j], mg); matched_d.add(j)
+                j = hi[dj]; tracks[ti].update(d[j, :4], d[j, 4], embs[j], occl[j], mg); tracks[ti].vote(det_team[j], occl[j]); matched_d.add(j)
             rem_tracks = [tracks[k] for k in ut]
-            m2, ut2, _ = associate(rem_tracks, d[lo], embs[lo], occl[lo], {**p, "appearance_weight": 0.15})
+            m2, ut2, _ = associate(rem_tracks, d[lo], embs[lo], occl[lo], {**p, "appearance_weight": 0.15}, det_team[lo])
             for ti, dj, mg in m2:
-                j = lo[dj]; rem_tracks[ti].update(d[j, :4], d[j, 4], embs[j], occl[j], mg); matched_d.add(j)
+                j = lo[dj]; rem_tracks[ti].update(d[j, :4], d[j, 4], embs[j], occl[j], mg); rem_tracks[ti].vote(det_team[j], occl[j]); matched_d.add(j)
             # new tracks from unmatched HIGH-score detections only
             for j in hi:
                 if j not in matched_d:
-                    tracks.append(Track(d[j, :4], d[j, 4], embs[j], occl[j]))
+                    t = Track(d[j, :4], d[j, 4], embs[j], occl[j]); t.vote(det_team[j], occl[j]); tracks.append(t)
             # emit + prune
             alive = []
             for t in tracks:
                 if t.time_since_update == 0 and t.hits >= min_hits:
                     b = t.box
-                    rows.append((i, t.id, *b, t.score, ObjClass.PLAYER.value, t.last_occl, t.last_margin))
+                    rows.append((i, t.id, *b, t.score, ObjClass.PLAYER.value, t.last_occl, t.last_margin, t.team))
                     t.history.append((i, b, t.score, t.last_occl, t.last_margin))
                     if t.last_margin < float(p.get("margin_low", 0.15)):
                         n_switch_risk += 1
@@ -234,13 +265,14 @@ class TrackStage(Stage):
                 log.info("track %s frame %d: %d live tracks", self.shot_id, i, len(tracks))
         finished.extend(tracks)
 
-        df = pd.DataFrame(rows, columns=TRACK_COLUMNS)
+        df = pd.DataFrame(rows, columns=TRACK_COLUMNS + ["team_online"])
         Storage.write_df(ctx.out("tracks.parquet"), df)
         app = pd.DataFrame([{"track_id": t.id, "embedding": t.emb.tolist(), "weight": float(t.emb_w),
-                             "n_frames": len(t.history)} for t in finished if len(t.history)])
+                             "n_frames": len(t.history), "team_online": t.team} for t in finished if len(t.history)])
         Storage.write_df(ctx.out("track_app.parquet"), app)
         n_frames = shot.end_frame - shot.start_frame + 1
         return {"n_tracks": int(df.track_id.nunique()) if len(df) else 0,
+                "off_pitch_rejected": n_off_pitch, "team_model_fitted": team_model.ready,
                 "tracks_per_frame": round(len(df) / max(n_frames, 1), 2),
                 "low_margin_frac": round(n_switch_risk / max(len(df), 1), 3),
                 "mean_track_len": round(float(df.groupby("track_id").size().mean()), 1) if len(df) else 0.0}

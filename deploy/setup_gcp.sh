@@ -19,7 +19,7 @@ gcloud iam service-accounts describe "$SA_NAME@$PROJECT.iam.gserviceaccount.com"
   gcloud iam service-accounts create "$SA_NAME" --display-name="soccer-cv runtime"
 SA="$SA_NAME@$PROJECT.iam.gserviceaccount.com"
 for ROLE in roles/storage.objectAdmin roles/logging.logWriter roles/artifactregistry.reader roles/batch.agentReporter; do
-  gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SA" --role="$ROLE" --quiet >/dev/null
+  gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SA" --role="$ROLE" --condition=None --quiet >/dev/null
 done
 
 # Submitter service account: the key you register in the Claude Science workspace.
@@ -29,7 +29,7 @@ gcloud iam service-accounts describe "$SUB@$PROJECT.iam.gserviceaccount.com" >/d
   gcloud iam service-accounts create "$SUB" --display-name="soccer-cv submitter (agent)"
 SUBSA="$SUB@$PROJECT.iam.gserviceaccount.com"
 for ROLE in roles/batch.jobsEditor roles/logging.viewer; do
-  gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SUBSA" --role="$ROLE" --quiet >/dev/null
+  gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SUBSA" --role="$ROLE" --condition=None --quiet >/dev/null
 done
 gcloud iam service-accounts add-iam-policy-binding "$SA" --member="serviceAccount:$SUBSA" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 gsutil iam ch "serviceAccount:$SUBSA:objectAdmin" "gs://$BUCKET"
