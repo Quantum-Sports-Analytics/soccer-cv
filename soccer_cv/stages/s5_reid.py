@@ -80,6 +80,28 @@ def current_ids(w: dict, raw: np.ndarray, tid: np.ndarray, frames: np.ndarray) -
     return out
 
 
+# Human motion limits (universal, no per-video tuning). Converted to pixels through the
+# box height, which is the only scale available before field calibration exists.
+V_MAX_MS, A_MAX_MS2, BODY_H_M = 9.5, 7.0, 1.80
+
+
+def motion_loglik(pre: dict, post: dict, fps: float = 25.0) -> tuple[float, float]:
+    """log N(post.p0 ; pre.p1 + v*gap, sigma) with sigma = box noise (+) reachable radius.
+
+    The reachable radius 0.5*a_max*gap^2 grows quadratically with the gap, so motion is
+    decisive for a 5-frame crossing and nearly flat for a 1-second tackle — by physics,
+    not by a tuned weight. Returns (loglik, distance in body heights)."""
+    gap = max(int(post["f"][0] - pre["f"][-1]), 1); h = pre["h"]
+    vmax = V_MAX_MS * h / BODY_H_M / fps; amax = A_MAX_MS2 * h / BODY_H_M / fps ** 2
+    v = pre["v"].copy(); sp = np.linalg.norm(v)
+    if sp > vmax:
+        v *= vmax / sp
+    pred = pre["p1"] + v * gap
+    sigma = float(np.hypot(0.15 * h, 0.5 * amax * gap ** 2 + 0.3 * h))
+    d = float(np.linalg.norm(pred - post["p0"]))
+    return -0.5 * (d / sigma) ** 2, d / h
+
+
 def _unit(v):
     return v / (np.linalg.norm(v) + 1e-9)
 
@@ -139,17 +161,19 @@ def resolve_window(w: dict, tr: pd.DataFrame, tid: np.ndarray, frames: np.ndarra
         return {"record": {**w, "decision": "undecidable", "margin": 0.0, "births": births}, "relabels": [], "participants": [a, b] + births, "conf": 0.3}
     pre = {t: seg(t, f0 - W, f0 - 1) for t in pre_ids}; post = {t: seg(t, f1 + 1, f1 + W) for t in post_ids}
     pre_m = {t: foot_track(t, f0 - 25, f0 - 1) for t in pre_ids}; post_m = {t: foot_track(t, f1 + 1, f1 + 25) for t in post_ids}
-    A = np.array([[float(pre[i] @ post[j]) for j in post_ids] for i in pre_ids])          # appearance
-    M = np.zeros_like(A)
+    A = np.array([[float(pre[i] @ post[j]) for j in post_ids] for i in pre_ids])          # appearance (cosine)
+    M = np.zeros_like(A)                                                                   # motion (log-lik, nats)
     for r, i in enumerate(pre_ids):
         for c, j in enumerate(post_ids):
             pm, qm = pre_m[i], post_m[j]
             if pm is None or qm is None:
                 continue
-            gap = qm["f"][0] - pm["f"][-1]
-            pred = pm["p1"] + pm["v"] * gap
-            M[r, c] = float(np.exp(-np.linalg.norm(pred - qm["p0"]) / (pm["h"] * max(1.0, gap / 12.0))))
-    score = A + w_motion * M
+            M[r, c] = motion_loglik(pm, qm)[0]
+    M -= M.max(axis=1, keepdims=True)                     # per-row normalisation: only ratios matter
+    M = np.maximum(M, -50.0)
+    # appearance -> nats: a cosine gap of `app_nat` is worth one nat (calibrated on same-person
+    # spread of OSNet segment means, ~0.02-0.04). `w_motion` here is the appearance scale.
+    score = A / max(w_motion, 1e-3) + M
     r_idx, c_idx = linear_sum_assignment(-score)
     best = float(score[r_idx, c_idx].sum())
     # second best: force each chosen cell out in turn, take the best alternative assignment

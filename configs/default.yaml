@@ -41,8 +41,8 @@ reid:                     # stage 5 — OSNet-AIN embeddings + ambiguous-crossin
   every_n_frames: 5
   torso_crop: [0.15, 0.55]   # vertical fraction of the box used for team colour
   swap_window_frames: 100    # evidence window on each side of an ambiguous crossing
-  swap_margin: 0.04          # assignment margin needed to decide (keep or swap); below -> split + low confidence
-  swap_motion_weight: 0.1    # motion only breaks near-ties; unreliable in tackles/stops
+  swap_margin: 1.5           # decision margin in nats (best vs runner-up assignment); below -> split + low confidence
+  swap_motion_weight: 0.03   # appearance scale: a ReID cosine gap of this size = 1 nat; motion enters as a reachability log-likelihood
 
 mask_tier:                # stage 6 (quality tier) — off until SAM3 is wired
   enabled: false
