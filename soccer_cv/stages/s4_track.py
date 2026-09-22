@@ -33,7 +33,7 @@ from scipy.optimize import linear_sum_assignment
 from ..core import Stage, StageContext, Storage, frames_iter
 from ..schema import TRACK_COLUMNS, ObjClass
 from ..teams import OnlineTeamModel, pitch_mask, feet_on_pitch
-from .s2_calib import load_calib, pitch_polygon_mask
+from .s2_calib import load_calib_params, feet_pitch_xy, on_pitch
 
 log = logging.getLogger(__name__)
 
@@ -220,7 +220,10 @@ class TrackStage(Stage):
         refit_every = int(p.get("team_refit_every", 100))
         use_pitch = bool(p.get("pitch_filter", True))
         n_off_pitch = 0
-        calib = load_calib(self.calib_uri) if self.calib_uri else None     # frame -> H (image <- pitch)
+        calib = load_calib_params(self.calib_uri) if self.calib_uri else None   # frame -> camera params
+        # Product rule: only people on the pitch are tracked. A detection is kept iff its feet
+        # (height-prior estimate when the box is cut by the image border) are inside the touch /
+        # goal lines + margin. Assistant referees and bench staff are therefore dropped too.
         margin_m = float(p.get("pitch_margin_m", 1.0))
         n_calib_frames = 0
 
@@ -229,10 +232,12 @@ class TrackStage(Stage):
             d = g[["x1", "y1", "x2", "y2", "score"]].to_numpy(dtype=float) if g is not None else np.zeros((0, 5))
             if use_pitch and len(d):
                 if calib is not None and i in calib:
-                    pm = pitch_polygon_mask(calib[i], frame.shape[1], frame.shape[0], margin_m); n_calib_frames += 1
+                    # feet in metres (estimated from the height prior when the box is cut by the
+                    # bottom edge), tested against the touch / goal lines + hard margin
+                    xy, _ = feet_pitch_xy(calib[i], d[:, :4], frame.shape[1], frame.shape[0])
+                    keep = on_pitch(xy, margin_m); n_calib_frames += 1
                 else:
-                    pm = pitch_mask(frame)
-                keep = feet_on_pitch(pm, d[:, :4])
+                    keep = feet_on_pitch(pitch_mask(frame), d[:, :4])
                 n_off_pitch += int((~keep).sum()); d = d[keep]
             for t in tracks:
                 t.predict()

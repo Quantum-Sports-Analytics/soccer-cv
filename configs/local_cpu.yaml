@@ -58,6 +58,7 @@ identity:
   link_appearance_threshold: 0.45
   abstain_below: 0.55
   split_link_margin: 0.03
+  staff_min_beyond_frac: 0.7
 ball3d:
   enabled: false
 render:

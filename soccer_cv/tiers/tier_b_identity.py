@@ -96,13 +96,13 @@ class IdentityTier(Stage):
         teams, cinfo = cluster_teams(emb, w, k_teams)
         tl["team"] = teams
 
-        # ---- staff: tracks that stay beyond the touch / goal lines and are not officials
-        # (coaches, stewards, photographers on the grass). Assistant referees also live beyond
-        # the touchline but are in the officials colour group, so they are kept.
+        # ---- safety net: tracks that still spend most of their frames beyond the lines (e.g. a
+        # detection kept by the margin on uncalibrated frames). Officials included: the product
+        # tracks only people on the pitch.
         n_staff = 0
         if "beyond_frac" in tl:
             staff = ((tl.beyond_frac.to_numpy(dtype=float) >= float(p.get("staff_min_beyond_frac", 0.7)))
-                     & (tl.n_frames.to_numpy() >= 25) & (teams != k_teams))
+                     & (tl.n_frames.to_numpy() >= 10))
             n_staff = int(staff.sum())
             if n_staff:
                 Storage.write_json(ctx.out("staff.json"), tl.loc[staff, ["shot_id", "track_id", "n_frames", "beyond_frac"]].to_dict(orient="records"))

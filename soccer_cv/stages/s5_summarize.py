@@ -41,9 +41,14 @@ class SummarizeStage(Stage):
         if Storage.exists(ctx.inp("splits.json")):
             for d in Storage.read_json(ctx.inp("splits.json")):
                 splits[int(d["track_id"])] = d
-        H = None
+        H = P = None
+        IMG_W, IMG_H = 1920, 1080
         if self.calib_uri and Storage.exists(Storage.join(self.calib_uri, "calib.parquet")):
             H = Storage.read_df(Storage.join(self.calib_uri, "calib.parquet")).set_index("frame")
+            P = H if {"cx", "pan", "f"} <= set(H.columns) else None
+            meta_uri = Storage.join(self.calib_uri.rsplit("/tier_a/", 1)[0], "ingest", "meta.json")
+            if Storage.exists(meta_uri):
+                m_ = Storage.read_json(meta_uri); IMG_W, IMG_H = int(m_["width"]), int(m_["height"])
 
         rows = []
         for tid, g in tracks.groupby("track_id"):
@@ -76,15 +81,17 @@ class SummarizeStage(Stage):
                         p = h @ foot
                         row[key] = json.dumps([float(p[0] / p[2]), float(p[1] / p[2])])
             row["calib_frac"] = float(H.loc[g.frame[g.frame.isin(H.index)], "valid"].mean()) if H is not None and g.frame.isin(H.index).any() else 0.0
-            # fraction of calibrated frames with the feet beyond a touch / goal line (staff, bench, AR)
+            # fraction of calibrated frames with the feet beyond a touch / goal line (staff, bench, AR);
+            # truncated boxes use the height-prior foot estimate (the box bottom is the image border)
             row["beyond_frac"] = -1.0
-            if H is not None:
-                gv = g[g.frame.isin(H.index)]
-                gv = gv[H.loc[gv.frame, "valid"].to_numpy(dtype=bool)] if len(gv) else gv
+            if P is not None:
+                gv = g[g.frame.isin(P.index)]
+                gv = gv[P.loc[gv.frame, "valid"].to_numpy(dtype=bool)] if len(gv) else gv
                 if len(gv) >= 10:
-                    Hs = H.loc[gv.frame, [f"h{k}" for k in range(9)]].to_numpy(dtype=float).reshape(-1, 3, 3)
-                    feet = np.stack([(gv.x1 + gv.x2).to_numpy() / 2, gv.y2.to_numpy(), np.ones(len(gv))], 1)
-                    pw = np.einsum("nij,nj->ni", np.linalg.inv(Hs), feet); pw = pw[:, :2] / pw[:, 2:3]
+                    from .s2_calib import feet_pitch_xy
+                    cols = ["cx", "cy", "cz", "pan", "tilt", "f"]
+                    pw = np.vstack([feet_pitch_xy(P.loc[int(r.frame), cols].to_numpy(dtype=float),
+                                                  np.array([[r.x1, r.y1, r.x2, r.y2]]), IMG_W, IMG_H)[0] for r in gv.itertuples()])
                     beyond = (np.abs(pw[:, 1]) > 34.0 + 0.2) | (np.abs(pw[:, 0]) > 52.5 + 0.2)
                     row["beyond_frac"] = round(float(beyond.mean()), 3)
             rows.append(row)

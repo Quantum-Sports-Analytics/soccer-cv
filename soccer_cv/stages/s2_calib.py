@@ -321,6 +321,60 @@ def pitch_polygon_mask(H: np.ndarray, img_w: int, img_h: int, margin_m: float = 
     return m
 
 
+def camera_P(params: np.ndarray, img_w: int, img_h: int) -> np.ndarray:
+    """Full 3x4 projection (pitch metres x, y, z-up -> image) for the parametric camera."""
+    H = camera_H(params, img_w, img_h)
+    cx, cy, cz, pan, tilt, f = params
+    t, ph = np.deg2rad(tilt), np.deg2rad(pan)
+    base = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+    Rx = np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
+    Rz = np.array([[np.cos(ph), -np.sin(ph), 0], [np.sin(ph), np.cos(ph), 0], [0, 0, 1]])
+    K = np.array([[f, 0, img_w / 2], [0, f, img_h / 2], [0, 0, 1.0]])
+    z_col = K @ (Rx @ base @ Rz)[:, 2]
+    return np.column_stack([H[:, 0], H[:, 1], z_col, H[:, 2]])
+
+
+def feet_pitch_xy(params: np.ndarray, boxes: np.ndarray, img_w: int, img_h: int,
+                  person_h: float = 1.8, edge_px: float = 3.0) -> tuple[np.ndarray, np.ndarray]:
+    """Pitch position (metres) of each person's feet, and a flag for boxes cut by the bottom edge.
+
+    For a box whose bottom touches the image border the feet are not visible: the box
+    bottom is the border, not the feet. We then search down the box's image column for
+    the ground point whose head (person_h above it) projects onto the box top — the
+    height prior turns a truncated box into a foot estimate. Boxes truncated at the top
+    as well (both ends unknown) keep the border point, flagged."""
+    H = camera_H(params, img_w, img_h); Hi = np.linalg.inv(H); P = camera_P(params, img_w, img_h)
+    boxes = np.asarray(boxes, float).reshape(-1, 4)
+    cxs = (boxes[:, 0] + boxes[:, 2]) / 2
+    uv = np.c_[cxs, boxes[:, 3], np.ones(len(boxes))] @ Hi.T
+    xy = uv[:, :2] / uv[:, 2:3]
+    cut = boxes[:, 3] >= img_h - edge_px
+    for i in np.where(cut & (boxes[:, 1] > edge_px))[0]:
+        h_box = boxes[i, 3] - boxes[i, 1]
+        vs = np.linspace(boxes[i, 3], boxes[i, 3] + 4 * max(h_box, 20), 200)
+        g = np.c_[np.full_like(vs, cxs[i]), vs, np.ones_like(vs)] @ Hi.T
+        g = g[:, :2] / g[:, 2:3]
+        head = np.c_[g, np.full(len(g), person_h), np.ones(len(g))] @ P.T
+        head_v = head[:, 1] / head[:, 2]
+        k = int(np.argmin(np.abs(head_v - boxes[i, 1])))
+        xy[i] = g[k]
+    return xy, cut
+
+
+def on_pitch(xy: np.ndarray, margin_m: float, L: float = L, W: float = W) -> np.ndarray:
+    return (np.abs(xy[:, 0]) <= L / 2 + margin_m) & (np.abs(xy[:, 1]) <= W / 2 + margin_m)
+
+
+def load_calib_params(uri: str) -> dict[int, np.ndarray] | None:
+    """frame -> camera params [cx, cy, cz, pan, tilt, f] for valid frames."""
+    if not Storage.exists(Storage.join(uri, "calib.parquet")):
+        return None
+    df = Storage.read_df(Storage.join(uri, "calib.parquet"))
+    df = df[df.valid]
+    cols = ["cx", "cy", "cz", "pan", "tilt", "f"]
+    return {int(f): v for f, v in zip(df.frame, df[cols].to_numpy(dtype=float))}
+
+
 def image_to_pitch(H: np.ndarray, uv: np.ndarray) -> np.ndarray:
     Hi = np.linalg.inv(H)
     p = np.c_[uv, np.ones(len(uv))] @ Hi.T

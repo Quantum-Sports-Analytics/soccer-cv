@@ -41,7 +41,7 @@ track:                    # stage 4
   team_ratio: 0.7         # detection is "confidently team i" if d_i < ratio * d_j
   team_refit_every: 100   # frames between refits of the online team model
   pitch_filter: true      # reject detections whose feet are off the pitch (calibrated polygon, else grass mask)
-  pitch_margin_m: 1.0     # tolerance outside the touchlines, metres
+  pitch_margin_m: 1.0     # keep a person iff feet within the lines + this margin (metres); nobody off the pitch is tracked
 
 reid:                     # stage 5 — OSNet-AIN embeddings + ambiguous-crossing resolution
   enabled: true
@@ -60,7 +60,8 @@ ball:                     # stage 7
   max_speed_px_per_frame: 90
   max_gap_frames: 20
 
-identity:                 # stages 8-10
+identity:
+  staff_min_beyond_frac: 0.7   # track removed as staff if >= this fraction of frames beyond the lines and not an official                 # stages 8-10
   team_clusters: 2
   max_per_team: 11
   link_max_gap_frames: 750      # 30 s at 25 fps
