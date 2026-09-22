@@ -49,11 +49,19 @@ class FuseStage(Stage):
         ident = Storage.read_df(Storage.join(root, "tier_b", "identities.parquet"))
         key = ident.set_index(["shot_id", "track_id"])
         fused, balls = [], []
-        for u in Storage.list(Storage.join(root, "tier_a")):
+        listed = Storage.list(Storage.join(root, "tier_a"))
+        reid_shots = {Path(u).parts[-3] for u in listed if u.endswith("s5_reid/tracks.parquet")}
+        for u in listed:
             if u.endswith("tracks.parquet"):
-                shot_id = Path(u).parts[-3]
+                shot_id, stage_dir = Path(u).parts[-3], Path(u).parts[-2]
+                if shot_id in reid_shots and stage_dir != "s5_reid":
+                    continue                       # prefer swap-corrected tracks
+                if shot_id not in reid_shots and stage_dir != "s4_track":
+                    continue
                 tr = Storage.read_df(u)
                 tr["shot_id"] = shot_id
+                if "swap_conf" not in tr:
+                    tr["swap_conf"] = 1.0
                 fused.append(tr)
             elif u.endswith("ball.parquet"):
                 balls.append(Storage.read_df(u))
@@ -74,7 +82,7 @@ class FuseStage(Stage):
             for k, (_, row) in enumerate(g.iterrows()):
                 out_rows.append((int(row.frame), int(r.identity_id) if not r.abstained else -1,
                                  int(r.team), r.jersey, row.x1, row.y1, row.x2, row.y2, None, None,
-                                 float(r.confidence) if not r.abstained else 0.0, float(err[k]),
+                                 float(min(r.confidence, row.swap_conf)) if not r.abstained else 0.0, float(err[k]),
                                  1 if (is_reentry and k == 0) else 0))
         fused_df = pd.DataFrame(out_rows, columns=FUSED_COLUMNS)
         Storage.write_df(ctx.out("fused.parquet"), fused_df)

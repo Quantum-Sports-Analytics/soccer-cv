@@ -1,5 +1,5 @@
 runtime:
-  device: cpu
+  device: auto
   fp16: true
   num_workers: 4
 ingest:
@@ -7,10 +7,10 @@ ingest:
   min_shot_frames: 12
   classify_every_n: 5
 detect:
-  model: rfdetr-small
-  resolution: 896
-  score_threshold: 0.3
-  tiles: none
+  model: rfdetr-medium
+  resolution: 960
+  score_threshold: 0.35
+  tiles: adaptive
   person_min_height_px: 14
 calib:
   enabled: false
@@ -29,7 +29,7 @@ track:
   team_refit_every: 100
   pitch_filter: true
 reid:
-  enabled: true
+  enabled: false
   every_n_frames: 5
   torso_crop:
   - 0.15

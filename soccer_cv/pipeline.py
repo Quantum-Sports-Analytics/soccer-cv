@@ -21,6 +21,7 @@ from .schema import ShotType
 from .stages.s0_ingest import IngestStage, load_shots
 from .stages.s3_detect import DetectStage, build_detector
 from .stages.s4_track import TrackStage
+from .stages.s5_reid import ReIDStage
 from .stages.s5_summarize import SummarizeStage
 from .stages.s7_ball import BallStage
 from .tiers.tier_b_identity import IdentityTier
@@ -36,8 +37,8 @@ def _append_manifest(run_uri: str, entry: dict) -> None:
     Storage.write_json(uri, m)
 
 
-def run_tier_a_shot(run_uri: str, shot_id: str, cfg: dict, detector=None, replay_uri: str | None = None):
-    """Tier A for one shot: detect -> track -> ball -> summarize. Returns the detector for reuse."""
+def run_tier_a_shot(run_uri: str, shot_id: str, cfg: dict, detector=None, replay_uri: str | None = None, encoder=None):
+    """Tier A for one shot: detect -> track -> reid/swap-fix -> ball -> summarize. Returns the detector for reuse."""
     ingest = Storage.join(run_uri, "ingest")
     base = Storage.join(run_uri, "tier_a", shot_id)
     if detector is None and replay_uri is None:
@@ -46,7 +47,12 @@ def run_tier_a_shot(run_uri: str, shot_id: str, cfg: dict, detector=None, replay
     _append_manifest(run_uri, st.execute(ingest, Storage.join(base, "s3_detect")))
     _append_manifest(run_uri, TrackStage(cfg, shot_id, ingest).execute(Storage.join(base, "s3_detect"), Storage.join(base, "s4_track")))
     _append_manifest(run_uri, BallStage(cfg, shot_id, ingest).execute(Storage.join(base, "s3_detect"), Storage.join(base, "s7_ball")))
-    _append_manifest(run_uri, SummarizeStage(cfg, shot_id).execute(Storage.join(base, "s4_track"), Storage.join(base, "s5_summarize")))
+    if cfg.get("reid", {}).get("enabled", True):
+        _append_manifest(run_uri, ReIDStage(cfg, shot_id, ingest, encoder=encoder).execute(Storage.join(base, "s4_track"), Storage.join(base, "s5_reid")))
+        track_src = Storage.join(base, "s5_reid")
+    else:
+        track_src = Storage.join(base, "s4_track")
+    _append_manifest(run_uri, SummarizeStage(cfg, shot_id, app_uri=Storage.join(base, "s4_track")).execute(track_src, Storage.join(base, "s5_summarize")))
     return st.detector
 
 

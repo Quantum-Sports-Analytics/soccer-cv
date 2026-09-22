@@ -22,14 +22,21 @@ class SummarizeStage(Stage):
     name = "s5_summarize"
     config_key = "reid"
 
-    def __init__(self, cfg: dict, shot_id: str, calib_uri: str | None = None):
+    def __init__(self, cfg: dict, shot_id: str, calib_uri: str | None = None, app_uri: str | None = None):
         super().__init__(cfg)
         self.shot_id = shot_id
         self.calib_uri = calib_uri
+        self.app_uri = app_uri          # where track_app.parquet lives (s4_track) when input is s5_reid
 
     def run(self, ctx: StageContext) -> dict:
         tracks = Storage.read_df(ctx.inp("tracks.parquet"))
-        app = Storage.read_df(ctx.inp("track_app.parquet")).set_index("track_id")
+        app_src = self.app_uri or ctx.input_uri
+        app = Storage.read_df(Storage.join(app_src, "track_app.parquet")).set_index("track_id")
+        reid = None
+        if Storage.exists(ctx.inp("track_reid.parquet")):
+            reid = Storage.read_df(ctx.inp("track_reid.parquet")).set_index("track_id")
+        if "swap_conf" not in tracks:
+            tracks["swap_conf"] = 1.0
         H = None
         if self.calib_uri and Storage.exists(Storage.join(self.calib_uri, "calib.parquet")):
             H = Storage.read_df(Storage.join(self.calib_uri, "calib.parquet")).set_index("frame")
@@ -50,6 +57,8 @@ class SummarizeStage(Stage):
                 "last_box": json.dumps([float(last.x1), float(last.y1), float(last.x2), float(last.y2)]),
                 "first_pitch_xy": None, "last_pitch_xy": None,
                 "jersey_votes": json.dumps({}), "team_cluster": None,
+                "reid_embedding": (reid.loc[tid, "reid"] if reid is not None and tid in reid.index else None),
+                "min_swap_conf": float(g.swap_conf.min()),
                 "mean_margin": float(g.margin.mean()), "frac_occluded": float((g.occl > 0.3).mean()),
                 "mean_height_px": float((g.y2 - g.y1).mean()),
             }

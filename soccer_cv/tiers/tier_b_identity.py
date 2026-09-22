@@ -45,7 +45,8 @@ def _hist_dist(a: np.ndarray, b: np.ndarray) -> float:
     return float(0.5 * np.abs(a - b).sum())
 
 
-def _link_belief(a: pd.Series, b: pd.Series, ea: np.ndarray, eb: np.ndarray, p: dict) -> float:
+def _link_belief(a: pd.Series, b: pd.Series, ea: np.ndarray, eb: np.ndarray, p: dict,
+                 ra: np.ndarray | None = None, rb: np.ndarray | None = None) -> float:
     gap = b.start_frame - a.end_frame
     if gap < 0 or gap > int(p.get("link_max_gap_frames", 750)):
         return 0.0
@@ -53,7 +54,14 @@ def _link_belief(a: pd.Series, b: pd.Series, ea: np.ndarray, eb: np.ndarray, p: 
     thr = float(p.get("link_appearance_threshold", 0.45))
     if d_app > thr:
         return 0.0
-    s_app = 1.0 - d_app / thr                          # 1 = identical colour signature
+    s_col = 1.0 - d_app / thr                          # 1 = identical colour signature
+    if ra is not None and rb is not None:
+        cos = float(ra @ rb)                           # ReID cosine; same person typically > 0.85
+        lo, hi = float(p.get("reid_cos_low", 0.75)), float(p.get("reid_cos_high", 0.92))
+        s_reid = float(np.clip((cos - lo) / (hi - lo), 0, 1))
+        s_app = 0.3 * s_col + 0.7 * s_reid
+    else:
+        s_app = s_col
     s_gap = float(np.exp(-gap / 250.0))                # 10 s half-life-ish at 25 fps
     # spatial plausibility in image space: displacement vs gap (cheap stand-in for pitch metres)
     la, fb = json.loads(a.last_box), json.loads(b.first_box)
@@ -80,6 +88,8 @@ class IdentityTier(Stage):
         tl = tl.sort_values(["start_frame", "shot_id", "track_id"]).reset_index(drop=True)
         emb = np.stack([np.asarray(json.loads(e), dtype=float) for e in tl.app_embedding])
         w = tl.app_weight.to_numpy(dtype=float)
+        reid = [np.asarray(json.loads(r), dtype=float) if isinstance(r, str) else None
+                for r in (tl.reid_embedding if "reid_embedding" in tl else [None] * len(tl))]
 
         # ---- stage 9 (team part)
         teams, cinfo = cluster_teams(emb, w, int(p.get("team_clusters", 2)))
@@ -97,7 +107,7 @@ class IdentityTier(Stage):
                     continue
                 if b.start_frame - a.end_frame > int(p.get("link_max_gap_frames", 750)):
                     break
-                bel = _link_belief(a, b, emb[i], emb[j], p)
+                bel = _link_belief(a, b, emb[i], emb[j], p, reid[i], reid[j])
                 if bel > 0:
                     G.add_edge(i, j, belief=bel)
 

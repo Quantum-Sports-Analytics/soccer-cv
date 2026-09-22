@@ -36,10 +36,13 @@ track:                    # stage 4
   team_refit_every: 100   # frames between refits of the online team model
   pitch_filter: true      # reject detections whose feet are off the grass mask
 
-reid:                     # stage 5
+reid:                     # stage 5 — OSNet-AIN embeddings + ambiguous-crossing resolution
+  enabled: true
   every_n_frames: 5
-  embed_dim: 128
   torso_crop: [0.15, 0.55]   # vertical fraction of the box used for team colour
+  swap_window_frames: 100    # evidence window on each side of an ambiguous crossing
+  swap_margin: 0.02          # (swap score - keep score) needed to apply a swap
+  swap_motion_weight: 0.3    # weight of motion continuity vs appearance in the decision
 
 mask_tier:                # stage 6 (quality tier) — off until SAM3 is wired
   enabled: false

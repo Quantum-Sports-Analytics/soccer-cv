@@ -60,7 +60,7 @@ def run_dir(tmp_path_factory):
     clip = d / "clip.mp4"
     dets = make_clip(clip)
     Storage.write_df(str(d / "dets.parquet"), dets)
-    cfg = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+    cfg = Path(__file__).resolve().parents[1] / "configs" / "test_noreid.yaml"
     out = run_match(str(clip), str(d / "run"), str(cfg), replay_uri=str(d / "dets.parquet"))
     return d / "run", out
 
