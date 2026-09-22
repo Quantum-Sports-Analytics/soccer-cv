@@ -89,6 +89,11 @@ def run_match(video_uri: str, run_uri: str, config_path: str, backend: str = "lo
     failed = [s for s in statuses if not s.get("ok")]
     if failed:
         log.error("tier A failed for %s", [s["shot_id"] for s in failed])
+    if statuses and len(failed) == len(statuses):
+        # nothing to identify or render: stop here with a message the platform can show
+        job = failed[0].get("job", "")
+        raise RuntimeError(f"Tier A failed on every shot ({len(failed)}/{len(statuses)}); GPU job {job} "
+                           f"state {failed[0].get('state')}. See the job's logs in Cloud Logging.")
 
     # ---- tier B
     _append_manifest(run_uri, IdentityTier(cfg).execute(Storage.join(run_uri, "tier_a"), Storage.join(run_uri, "tier_b")))

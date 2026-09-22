@@ -68,6 +68,8 @@ class CloudRunJobsBackend(Backend):
 
     # ------------------------------------------------------------ spec
     def command(self, with_code: bool) -> str:
+        if getattr(self, "command_override", None):
+            return self.command_override
         if with_code:
             return "set -e\n" + CODE_FETCH + TIER_A_CMD.format(prefix="cd /code && PYTHONPATH=/code ")
         return TIER_A_CMD.format(prefix="")
@@ -78,7 +80,13 @@ class CloudRunJobsBackend(Backend):
         if not tasks:
             raise ValueError("no tasks")
         run_uri, cfg_uri = tasks[0].run_uri, tasks[0].config_uri
-        env = {"RUN_URI": run_uri, "CONFIG_URI": cfg_uri, "SHOT_LIST": ",".join(t.shot_id for t in tasks)}
+        # PYTHONFAULTHANDLER: a native crash (segfault in CUDA / OpenCV / decoder) prints the Python
+        # stack of every thread to stderr, i.e. into Cloud Logging, instead of a bare "Segmentation fault".
+        env = {"RUN_URI": run_uri, "CONFIG_URI": cfg_uri, "SHOT_LIST": ",".join(t.shot_id for t in tasks),
+               "PYTHONFAULTHANDLER": "1", "PYTHONUNBUFFERED": "1",
+               # rfdetr's import-time torch.jit.script segfaults on torch 2.6 (image built from the
+               # cu124 index); eager mode is equivalent for these box-geometry helpers.
+               "PYTORCH_JIT": "0"}
         if code_uri:
             env["CODE_URI"] = code_uri
         container = run_v2.Container(

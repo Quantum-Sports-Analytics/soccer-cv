@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3.11 -m venv /venv
 ENV PATH=/venv/bin:$PATH
 RUN pip install --upgrade pip && \
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 WORKDIR /app
 COPY pyproject.toml ./
 COPY soccer_cv ./soccer_cv

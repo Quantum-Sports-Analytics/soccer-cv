@@ -88,6 +88,7 @@ def test_job_spec():
     assert c.image == KW["image"]
     assert dict(c.resources.limits) == {"cpu": "8", "memory": "32Gi", "nvidia.com/gpu": "1"}
     env = {e.name: e.value for e in c.env}
+    env.pop("PYTHONFAULTHANDLER"); env.pop("PYTHONUNBUFFERED"); assert env.pop("PYTORCH_JIT") == "0"
     assert env == {"RUN_URI": "gs://soccer-cv/runs/r1", "CONFIG_URI": "gs://soccer-cv/runs/r1/config.yaml",
                    "SHOT_LIST": "shot_0000,shot_0001,shot_0002"}
     cmd = c.args[1]
