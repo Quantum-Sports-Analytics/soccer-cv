@@ -31,6 +31,10 @@ SUBSA="$SUB@$PROJECT.iam.gserviceaccount.com"
 for ROLE in roles/batch.jobsEditor roles/logging.viewer roles/run.developer; do
   gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SUBSA" --role="$ROLE" --condition=None --quiet >/dev/null
 done
+# Cloud Run checks at job-creation time that the *submitter* can pull the image.
+gcloud artifacts repositories add-iam-policy-binding soccer-cv --location="$REGION" --project="$PROJECT" \
+  --member="serviceAccount:soccer-cv-submitter@$PROJECT.iam.gserviceaccount.com" \
+  --role=roles/artifactregistry.reader --condition=None >/dev/null
 gcloud iam service-accounts add-iam-policy-binding "$SA" --member="serviceAccount:$SUBSA" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 gsutil iam ch "serviceAccount:$SUBSA:objectAdmin" "gs://$BUCKET"
 gcloud iam service-accounts keys create submitter-key.json --iam-account="$SUBSA"
