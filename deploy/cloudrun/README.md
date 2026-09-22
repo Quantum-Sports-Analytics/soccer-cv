@@ -16,15 +16,23 @@ to pick up platform code changes.
 
 ## 2. Deploy (authenticated — recommended)
 
+GPU work goes to **Cloud Run Jobs** (`BACKEND=cloudrun`, where the L4 quota is). The service
+itself drives each run on its CPU (ingest, identity, render), so it must keep CPU while no
+request is in flight: `--no-cpu-throttling`, and `--min-instances 1` during a demo session
+(set it back to 0 afterwards; an idle 2-vCPU instance is billed while it exists).
+
 ```bash
 gcloud run deploy soccer-cv-demo \
   --image europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-bc:latest \
   --region europe-west1 \
   --service-account soccer-cv-submitter@quantum-analytics-495309.iam.gserviceaccount.com \
   --memory 4Gi --cpu 2 --timeout 3600 \
-  --max-instances 1 --session-affinity \
+  --max-instances 1 --min-instances 1 --session-affinity --no-cpu-throttling \
+  --set-env-vars BACKEND=cloudrun \
   --no-allow-unauthenticated
 ```
+
+`BACKEND=batch` (the image default) submits one whole-video Batch job instead.
 
 `--max-instances 1 --session-affinity`: upload chunks are assembled on the instance's
 disk, so all chunks of one upload must reach the same instance. Fine for a demo; the
@@ -43,12 +51,13 @@ service behind Identity-Aware Proxy.
 
 ## 3. Cost and idle-GPU guarantees
 
-- One L4 (g2-standard-8) per video, on-demand (not Spot, to avoid capacity waits).
-  The VM exists only while the job runs; Batch deletes it when the task exits.
+- `cloudrun`: one L4 per camera shot; the Cloud Run job is deleted as soon as Tier A
+  returns (success, failure or interrupt). `batch`: one L4 VM per video, deleted on exit.
 - Every job has a hard `maxRunDuration` (`GPU_TIMEOUT_S`, default 3600 s).
 - The header shows the number of active GPU jobs; the **annuler** button deletes the
   job and its VM immediately.
 - Check from a terminal at any time:
+  `gcloud run jobs list --region europe-west1` (soccer-cv jobs exist only while running) and
   `gcloud batch jobs list --location europe-west1 --filter="status.state!=SUCCEEDED AND status.state!=FAILED"`
 
 ## 4. Run locally instead

@@ -76,6 +76,17 @@ class SummarizeStage(Stage):
                         p = h @ foot
                         row[key] = json.dumps([float(p[0] / p[2]), float(p[1] / p[2])])
             row["calib_frac"] = float(H.loc[g.frame[g.frame.isin(H.index)], "valid"].mean()) if H is not None and g.frame.isin(H.index).any() else 0.0
+            # fraction of calibrated frames with the feet beyond a touch / goal line (staff, bench, AR)
+            row["beyond_frac"] = -1.0
+            if H is not None:
+                gv = g[g.frame.isin(H.index)]
+                gv = gv[H.loc[gv.frame, "valid"].to_numpy(dtype=bool)] if len(gv) else gv
+                if len(gv) >= 10:
+                    Hs = H.loc[gv.frame, [f"h{k}" for k in range(9)]].to_numpy(dtype=float).reshape(-1, 3, 3)
+                    feet = np.stack([(gv.x1 + gv.x2).to_numpy() / 2, gv.y2.to_numpy(), np.ones(len(gv))], 1)
+                    pw = np.einsum("nij,nj->ni", np.linalg.inv(Hs), feet); pw = pw[:, :2] / pw[:, 2:3]
+                    beyond = (np.abs(pw[:, 1]) > 34.0 + 0.2) | (np.abs(pw[:, 0]) > 52.5 + 0.2)
+                    row["beyond_frac"] = round(float(beyond.mean()), 3)
             rows.append(row)
         df = pd.DataFrame(rows)
         Storage.write_df(ctx.out("tracklets.parquet"), df)

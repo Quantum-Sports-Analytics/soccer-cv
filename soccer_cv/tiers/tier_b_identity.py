@@ -92,8 +92,23 @@ class IdentityTier(Stage):
                 for r in (tl.reid_embedding if "reid_embedding" in tl else [None] * len(tl))]
 
         # ---- stage 9 (team part)
-        teams, cinfo = cluster_teams(emb, w, int(p.get("team_clusters", 2)))
+        k_teams = int(p.get("team_clusters", 2))
+        teams, cinfo = cluster_teams(emb, w, k_teams)
         tl["team"] = teams
+
+        # ---- staff: tracks that stay beyond the touch / goal lines and are not officials
+        # (coaches, stewards, photographers on the grass). Assistant referees also live beyond
+        # the touchline but are in the officials colour group, so they are kept.
+        n_staff = 0
+        if "beyond_frac" in tl:
+            staff = ((tl.beyond_frac.to_numpy(dtype=float) >= float(p.get("staff_min_beyond_frac", 0.7)))
+                     & (tl.n_frames.to_numpy() >= 25) & (teams != k_teams))
+            n_staff = int(staff.sum())
+            if n_staff:
+                Storage.write_json(ctx.out("staff.json"), tl.loc[staff, ["shot_id", "track_id", "n_frames", "beyond_frac"]].to_dict(orient="records"))
+                keep = ~staff
+                tl = tl[keep].reset_index(drop=True); emb = emb[keep]; w = w[keep]
+                reid = [r for r, kk in zip(reid, keep) if kk]; teams = teams[keep]
 
         # ---- stage 8: graph
         split_cands: dict[int, set[int]] = {}
@@ -266,6 +281,6 @@ class IdentityTier(Stage):
                            {"edges": [(int(i), int(j), round(b, 3)) for i, j, b in used_edges], "clusters": cinfo})
         n_reentry = len(used_edges)
         return {"n_tracklets": len(tl), "n_identities": int(next_id - 1), "split_abstain": n_split_abstain,
-                "n_relinks": n_reentry, "n_abstained": int(tl.abstained.sum()),
+                "n_relinks": n_reentry, "n_abstained": int(tl.abstained.sum()), "n_staff_removed": n_staff,
                 "cardinality_violations_frames": n_card_viol,
                 "team_sizes": tl[~tl.abstained].groupby("team").identity_id.nunique().to_dict()}

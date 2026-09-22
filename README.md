@@ -58,37 +58,34 @@ Register `submitter-key.json` in the Claude Science workspace (Customize -> Cred
 then delete the local copy. The submitter can only: create Batch jobs, act as the runtime SA,
 read/write the bucket, read logs.
 
-Run a match on GPU (Cloud Batch, one task per camera shot, L4 Spot):
+Run a match on GPU. Two interchangeable Tier-A backends, same outputs:
+
+**Cloud Run Jobs** (recommended: the project's L4 quota is on Cloud Run, 15 L4 in europe-west1;
+no Spot tier; one L4 + 8 vCPU + 32 GiB per shot-task; the job is deleted when Tier A returns).
+Needs `roles/run.developer` on the submitter:
 
 ```bash
-soccer-cv run --video-uri gs://$BUCKET/in/match.mp4 --run-uri gs://$BUCKET/runs/match \
-  --config configs/default.yaml --backend batch --backend-kwargs \
+soccer-cv run --video-uri gs://soccer-cv/videos/match.mp4 --run-uri gs://soccer-cv/runs/match \
+  --config configs/gpu_l4.yaml --backend cloudrun --backend-kwargs \
+  '{"project":"quantum-analytics-495309","region":"europe-west1",
+    "image":"europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest",
+    "service_account":"soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com",
+    "max_parallel":8,"task_timeout_s":3600}'
+```
+
+**Cloud Batch** (array job, L4 Spot; Batch L4 quota currently capped at 2 in europe-west1):
+
+```bash
+soccer-cv run --video-uri gs://soccer-cv/videos/match.mp4 --run-uri gs://soccer-cv/runs/match \
+  --config configs/gpu_l4.yaml --backend batch --backend-kwargs \
   '{"project":"quantum-analytics-495309","region":"europe-west1",
     "image":"europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest",
     "service_account":"soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com",
     "gpu_type":"nvidia-l4","spot":true}'
 ```
 
-Demo on Cloud Run (CPU image; it submits Batch jobs for Tier A):
+Both backends ship the current code with each job (content-hashed tarball in
+`gs://soccer-cv/code/`), so code changes never need a GPU-image rebuild. The driver
+(ingest + Tier B/C) runs wherever `soccer-cv run` is invoked; it needs only CPU.
 
-```bash
-gcloud run deploy soccer-cv-demo --region europe-west1 \
-  --image europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-bc:latest \
-  --service-account soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com \
-  --memory 4Gi --cpu 2 --timeout 3600 --no-allow-unauthenticated \
-  --set-env-vars RUNS_URI=gs://$BUCKET/runs,BACKEND=batch,BACKEND_KWARGS='{"project":"quantum-analytics-495309","region":"europe-west1","image":"europe-west1-docker.pkg.dev/quantum-analytics-495309/soccer-cv/tier-a:latest","service_account":"soccer-cv-runner@quantum-analytics-495309.iam.gserviceaccount.com"}'
-```
-
-## Run layout (local dir or gs:// prefix)
-
-```
-<run>/config.yaml
-<run>/ingest/{video.mp4, shots.json, meta.json}
-<run>/tier_a/<shot_id>/{s3_detect, s4_track, s7_ball, s5_summarize}/
-<run>/tier_b/{identities.parquet, roster.parquet, identity_graph.json}
-<run>/tier_c/{fused.parquet, ball.parquet, overlay.mp4}
-<run>/manifest.json      per-stage timings + metrics
-```
-
-Every stage writes `_DONE_<stage>.json` with its config hash; re-runs and preempted
-Spot tasks skip finished stages.
+Demo platform on Cloud Run: see [deploy/cloudrun/README.md](deploy/cloudrun/README.md).

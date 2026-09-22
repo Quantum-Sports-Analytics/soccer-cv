@@ -31,8 +31,16 @@ from ..core import Storage
 HERE = Path(__file__).parent
 REPO = HERE.parents[1]
 RUNS_URI = os.environ.get("RUNS_URI", str((REPO / "runs").resolve()))
-CONFIG = os.environ.get("SCV_CONFIG", str(REPO / "configs" / ("gpu_l4.yaml" if os.environ.get("BACKEND") == "batch" else "default.yaml")))
-BACKEND = os.environ.get("BACKEND", "local")
+BACKEND = os.environ.get("BACKEND", "local")            # local | batch | cloudrun
+CONFIG = os.environ.get("SCV_CONFIG", str(REPO / "configs" / ("gpu_l4.yaml" if BACKEND in ("batch", "cloudrun") else "default.yaml")))
+
+
+def _cloudrun_kwargs() -> dict:
+    from ..backends import gcp_run
+    kw = {"project": gcp_run.PROJECT, "region": gcp_run.REGION, "image": gcp_run.IMAGE,
+          "service_account": gcp_run.RUNTIME_SA, "task_timeout_s": int(os.environ.get("GPU_TIMEOUT_S", "3600"))}
+    kw.update(json.loads(os.environ.get("BACKEND_KWARGS", "{}")))
+    return kw
 GPU_TIMEOUT_S = int(os.environ.get("GPU_TIMEOUT_S", "3600"))
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "2000"))
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "scv_uploads"
@@ -94,10 +102,16 @@ def _refresh(job: dict) -> dict:
 
 # ------------------------------------------------------------------ execution
 def _run_local(job: dict) -> None:
+    """Driver thread. local: everything here. cloudrun: ingest + Tier B/C here (CPU), Tier A on
+    Cloud Run GPU tasks; the Cloud Run job is deleted when Tier A returns."""
     from ..pipeline import run_match
     job.update(status="running", started=time.time()); _save_job(job)
     try:
-        run_match(job["video_uri"], job["run_uri"], CONFIG, backend="local")
+        cfg_uri = Storage.join(job["run_uri"], "config.yaml")
+        if BACKEND == "cloudrun":
+            run_match(job["video_uri"], job["run_uri"], cfg_uri, backend="cloudrun", backend_kwargs=_cloudrun_kwargs())
+        else:
+            run_match(job["video_uri"], job["run_uri"], CONFIG, backend="local")
         job.update(status="done", finished=time.time())
     except Exception as e:                        # noqa: BLE001
         job.update(status="failed", error=repr(e)[:500], finished=time.time())
@@ -266,10 +280,16 @@ def run_video(run_id: str, which: str, request: Request):
 @app.get("/api/gpu")
 def gpu_status():
     """Every Batch job not yet terminal — the check that no GPU is running unattended."""
-    if BACKEND != "batch":
-        return {"backend": BACKEND, "active": []}
-    from ..backends import gcp_run
-    return {"backend": BACKEND, "active": gcp_run.list_active()}
+    try:
+        if BACKEND == "batch":
+            from ..backends import gcp_run
+            return {"backend": BACKEND, "active": gcp_run.list_active()}
+        if BACKEND == "cloudrun":
+            from ..backends import gcp_cloudrun, gcp_run
+            return {"backend": BACKEND, "active": gcp_cloudrun.list_active(gcp_run.PROJECT, gcp_run.REGION)}
+    except Exception as e:                        # noqa: BLE001
+        return {"backend": BACKEND, "active": [], "error": repr(e)[:200]}
+    return {"backend": BACKEND, "active": []}
 
 
 @app.get("/", response_class=HTMLResponse)

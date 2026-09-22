@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--video-uri", required=True)
     m.add_argument("--run-uri", required=True)
     m.add_argument("--config", required=True)
-    m.add_argument("--backend", default="local", choices=["local", "batch"])
+    m.add_argument("--backend", default="local", choices=["local", "batch", "cloudrun"])
     m.add_argument("--backend-kwargs", default="{}", help="JSON, e.g. '{\"project\":..., \"region\":..., \"image\":...}'")
     m.add_argument("--all-shots", action="store_true", help="also process non-main-camera shots")
     m.add_argument("--replay-detections", default=None, help="parquet of precomputed detections (no detector)")

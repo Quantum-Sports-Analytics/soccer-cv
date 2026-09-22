@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["torch", "torchvision", "rfdetr"]
-gcp = ["google-cloud-storage", "google-cloud-batch"]
+gcp = ["google-cloud-storage", "google-cloud-batch", "google-cloud-run", "requests"]
 demo = ["fastapi", "uvicorn", "python-multipart", "jinja2"]
 dev = ["pytest"]
 

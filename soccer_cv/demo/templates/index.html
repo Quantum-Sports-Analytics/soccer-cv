@@ -212,7 +212,7 @@ async function gpu() {
   try { const g = await (await fetch('/api/gpu')).json();
     const n = g.active.length;
     $('#gpu').innerHTML = `<span class="dot" style="background:${n ? 'var(--warn)' : 'var(--ok)'}"></span>` +
-      (g.backend === 'batch' ? (n ? `${n} job GPU actif${n > 1 ? 's' : ''}` : 'aucun GPU actif') : 'backend local');
+      (g.backend !== 'local' ? (n ? `${n} job GPU actif${n > 1 ? 's' : ''}` : 'aucun GPU actif') : 'backend local');
   } catch (e) {}
   setTimeout(gpu, 15000);
 }

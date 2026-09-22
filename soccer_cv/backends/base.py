@@ -37,4 +37,7 @@ def get_backend(name: str, **kw) -> Backend:
     if name == "batch":
         from .gcp_batch import CloudBatchBackend
         return CloudBatchBackend(**kw)
+    if name == "cloudrun":
+        from .gcp_cloudrun import CloudRunJobsBackend
+        return CloudRunJobsBackend(**kw)
     raise ValueError(f"unknown backend {name!r}")

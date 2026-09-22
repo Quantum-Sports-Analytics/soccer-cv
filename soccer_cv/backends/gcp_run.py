@@ -87,7 +87,9 @@ _FETCH = ("python - <<'PY'\n"
 
 
 def job_spec(video_uri: str, run_uri: str, config_uri: str, gpu: str = "nvidia-l4", spot: bool = False,
-             timeout_s: int = 3600, labels: dict | None = None, code_uri: str | None = None) -> dict:
+             timeout_s: int = 3600, labels: dict | None = None, code_uri: str | None = None,
+             region: str | None = None) -> dict:
+    region = region or REGION
     cmd = f'soccer-cv -v run --video-uri "{video_uri}" --run-uri "{run_uri}" --config "{config_uri}" --backend local'
     if code_uri:
         b, k = code_uri[5:].split("/", 1)
@@ -109,7 +111,7 @@ def job_spec(video_uri: str, run_uri: str, config_uri: str, gpu: str = "nvidia-l
                            "policy": {"machineType": MACHINE.get(gpu, "g2-standard-8"),
                                       "provisioningModel": "SPOT" if spot else "STANDARD",
                                       "accelerators": [{"type": gpu, "count": 1}]}}],
-            "location": {"allowedLocations": [f"regions/{REGION}"]},
+            "location": {"allowedLocations": [f"regions/{region}"]},
             "serviceAccount": {"email": RUNTIME_SA},
         },
         "logsPolicy": {"destination": "CLOUD_LOGGING"},
@@ -117,10 +119,13 @@ def job_spec(video_uri: str, run_uri: str, config_uri: str, gpu: str = "nvidia-l
     }
 
 
-def submit(video_uri: str, run_uri: str, config_uri: str, job_id: str | None = None, **kw) -> str:
+def submit(video_uri: str, run_uri: str, config_uri: str, job_id: str | None = None, region: str | None = None, **kw) -> str:
+    """The image stays in REGION's Artifact Registry; Batch pulls it cross-region when needed."""
     import uuid
+    region = region or REGION
     job_id = job_id or f"scv-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
-    url = f"{API}/projects/{PROJECT}/locations/{REGION}/jobs?job_id={job_id}"
+    url = f"{API}/projects/{PROJECT}/locations/{region}/jobs?job_id={job_id}"
+    kw["region"] = region
     r = _req("POST", url, json=job_spec(video_uri, run_uri, config_uri, **kw))
     if r.status_code >= 300:
         raise RuntimeError(f"Batch submit failed {r.status_code}: {r.text[:500]}")
@@ -142,13 +147,17 @@ def cancel(name: str) -> int:
     return _req("DELETE", f"{API}/{name}").status_code
 
 
-def list_active() -> list[dict]:
-    r = _req("GET", f"{API}/projects/{PROJECT}/locations/{REGION}/jobs?pageSize=100")
+FALLBACK_REGIONS = [r for r in os.environ.get("GCP_GPU_REGIONS", f"{REGION},europe-west4").split(",") if r]
+
+
+def list_active(regions: list[str] | None = None) -> list[dict]:
     out = []
-    for j in r.json().get("jobs", []):
-        st = j.get("status", {}).get("state")
-        if st not in TERMINAL:
-            out.append({"name": j["name"], "state": st, "created": j.get("createTime")})
+    for reg in regions or FALLBACK_REGIONS:
+        r = _req("GET", f"{API}/projects/{PROJECT}/locations/{reg}/jobs?pageSize=100")
+        for j in r.json().get("jobs", []):
+            st = j.get("status", {}).get("state")
+            if st not in TERMINAL:
+                out.append({"name": j["name"], "state": st, "created": j.get("createTime")})
     return out
 
 

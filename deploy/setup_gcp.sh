@@ -28,7 +28,7 @@ SUB=soccer-cv-submitter
 gcloud iam service-accounts describe "$SUB@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 || \
   gcloud iam service-accounts create "$SUB" --display-name="soccer-cv submitter (agent)"
 SUBSA="$SUB@$PROJECT.iam.gserviceaccount.com"
-for ROLE in roles/batch.jobsEditor roles/logging.viewer; do
+for ROLE in roles/batch.jobsEditor roles/logging.viewer roles/run.developer; do
   gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:$SUBSA" --role="$ROLE" --condition=None --quiet >/dev/null
 done
 gcloud iam service-accounts add-iam-policy-binding "$SA" --member="serviceAccount:$SUBSA" --role=roles/iam.serviceAccountUser --quiet >/dev/null
