@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+runs/
+*.mp4
+*.parquet
+!tests/fixtures/*.parquet
+.env
+*.egg-info/
+.pytest_cache/
+weights/

@@ -1,0 +1,12 @@
+# Tier B + C + demo: CPU only (identity resolution, fusion, render, web app).
+FROM python:3.11-slim
+ENV PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY pyproject.toml ./
+COPY soccer_cv ./soccer_cv
+COPY configs ./configs
+RUN pip install ".[gcp,demo]"
+EXPOSE 8080
+CMD ["uvicorn", "soccer_cv.demo.app:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,0 +1,18 @@
+# Tier A: GPU perception (detect / track / ball / summarize). Runs one shot per Batch task.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+ENV DEBIAN_FRONTEND=noninteractive PIP_NO_CACHE_DIR=1 PYTHONUNBUFFERED=1 RF_HOME=/weights
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3.11 python3.11-venv python3-pip ffmpeg libgl1 libglib2.0-0 git && \
+    rm -rf /var/lib/apt/lists/*
+RUN python3.11 -m venv /venv
+ENV PATH=/venv/bin:$PATH
+RUN pip install --upgrade pip && \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+WORKDIR /app
+COPY pyproject.toml ./
+COPY soccer_cv ./soccer_cv
+COPY configs ./configs
+RUN pip install ".[gpu,gcp]"
+# pre-download detector weights so tasks do not hit the network at start
+RUN python -c "from rfdetr import RFDETRMedium; RFDETRMedium(resolution=952, device='cpu')" || true
+ENTRYPOINT ["soccer-cv"]

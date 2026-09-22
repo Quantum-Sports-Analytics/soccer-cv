@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>soccer-cv — broadcast perception demo</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --line:#2a2f3a; --txt:#e6e8ee; --muted:#9aa3b2; --acc:#4f8cff; --ok:#3ecf8e; --warn:#f2b94b; --bad:#ff6b6b; }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--txt) }
+  header { padding:18px 28px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px }
+  header h1 { font-size:18px; margin:0; font-weight:600 }
+  header span { color:var(--muted) }
+  main { display:grid; grid-template-columns: 1fr 380px; gap:20px; padding:20px 28px; max-width:1500px }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 12px }
+  video { width:100%; background:#000; border-radius:8px }
+  .drop { border:1px dashed var(--line); border-radius:10px; padding:28px; text-align:center; color:var(--muted); cursor:pointer }
+  .drop.over { border-color:var(--acc); color:var(--txt) }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-weight:600; cursor:pointer }
+  button:disabled { opacity:.5; cursor:default }
+  table { width:100%; border-collapse:collapse; font-size:13px }
+  td, th { padding:6px 4px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
+  th { color:var(--muted); font-weight:500 }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#242a36 }
+  .pill.done { background:#173a2c; color:var(--ok) } .pill.running { background:#3a3117; color:var(--warn) } .pill.failed { background:#3a1717; color:var(--bad) }
+  .legend span { display:inline-block; margin-right:14px; color:var(--muted) }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px }
+  code { color:var(--muted) }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--muted); white-space:pre-wrap; max-height:220px; overflow:auto }
+</style>
+</head>
+<body>
+<header><h1>soccer-cv</h1><span>broadcast perception — players, ball, identity, overlay · backend: {{ backend }}</span></header>
+<main>
+  <section>
+    <div class="card" id="uploadCard">
+      <h2>1 · Input video</h2>
+      <div class="drop" id="drop">Drop a broadcast clip (.mp4) here or click to choose</div>
+      <input type="file" id="file" accept="video/mp4,video/*" hidden>
+      <p style="margin:12px 0 0"><button id="go" disabled>Run pipeline</button> <span id="fname" style="color:var(--muted);margin-left:10px"></span></p>
+    </div>
+    <div class="card" style="margin-top:20px">
+      <h2>3 · Overlay</h2>
+      <video id="video" controls preload="metadata"></video>
+      <p class="legend" style="margin:10px 0 0">
+        <span><i style="background:#e74c3c"></i>team A</span>
+        <span><i style="background:#3cc8ff"></i>team B</span>
+        <span><i style="background:#a0a0a0"></i>? = unknown (abstained)</span>
+        <span><i style="background:#fff;border:1px solid #888"></i>white ring = re-linked after leaving the frame</span>
+        <span><i style="background:#ffa500"></i>orange dot = ambiguous association</span>
+        <span>ball: white visible · yellow in flight · violet interpolated (occluded)</span>
+      </p>
+    </div>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>2 · Run</h2>
+      <p>Status: <span class="pill" id="status">idle</span> <span id="elapsed" style="color:var(--muted)"></span></p>
+      <table id="stages"><thead><tr><th>stage</th><th>s</th><th>metrics</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card" style="margin-top:20px">
+      <h2>Log</h2>
+      <div id="log"></div>
+    </div>
+  </aside>
+</main>
+<script>
+const drop = document.getElementById('drop'), fileIn = document.getElementById('file'), go = document.getElementById('go');
+const statusEl = document.getElementById('status'), stagesEl = document.querySelector('#stages tbody');
+const logEl = document.getElementById('log'), video = document.getElementById('video');
+let file = null, timer = null, t0 = null;
+const log = m => { logEl.textContent += `[${new Date().toLocaleTimeString()}] ${m}\n`; logEl.scrollTop = logEl.scrollHeight; };
+drop.onclick = () => fileIn.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); setFile(e.dataTransfer.files[0]); };
+fileIn.onchange = () => setFile(fileIn.files[0]);
+function setFile(f){ file = f; document.getElementById('fname').textContent = f ? `${f.name} (${(f.size/1e6).toFixed(1)} MB)` : ''; go.disabled = !f; }
+go.onclick = async () => {
+  go.disabled = true; const fd = new FormData(); fd.append('file', file);
+  setStatus('uploading'); log(`uploading ${file.name}`);
+  const r = await fetch('/api/jobs', {method:'POST', body:fd}); const j = await r.json();
+  log(`job ${j.job_id} created`); t0 = Date.now(); poll(j.job_id);
+};
+function setStatus(s){ statusEl.textContent = s; statusEl.className = 'pill ' + (s==='done'?'done':s==='failed'?'failed':'running'); }
+const fmt = v => typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(3)) : (typeof v === 'object' ? JSON.stringify(v) : v);
+async function poll(id){
+  const r = await fetch(`/api/jobs/${id}`); const j = await r.json();
+  setStatus(j.status); document.getElementById('elapsed').textContent = `${((Date.now()-t0)/1000).toFixed(0)} s`;
+  stagesEl.innerHTML = j.stages.map(s => `<tr><td><code>${s.stage}</code></td><td>${s.seconds}</td><td>${Object.entries(s.metrics).map(([k,v])=>`${k}=${fmt(v)}`).join('<br>')}</td></tr>`).join('');
+  if (j.status === 'done') { log('done — loading overlay'); video.src = `/api/jobs/${id}/overlay.mp4`; go.disabled = false; return; }
+  if (j.status === 'failed') { log('FAILED ' + j.error); go.disabled = false; return; }
+  setTimeout(() => poll(id), 2000);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+stage,implementation,calls_per_video_s,ms_per_call,notes,ms_per_video_s
+Ingest / decode,NVDEC 1080p25,25,0.8,"GPU-decode, overlapped with compute",20.0
+Shot + camera-type class.,"small CNN, 5 Hz",5,2.0,cut / replay / close-up gating,10.0
+Player+referee detection,"RF-DETR-M 960px, 2 adaptive tiles",25,12.0,"boundary-aware tiling, not fixed grid",300.0
+Field keypoints + lines,"multi-task head, shared backbone",25,8.0,feeds homography optimisation,200.0
+Ball detection,motion-polarity heatmap net,25,6.0,"temporal window, 2 hi-res crops",150.0
+Appearance embeddings,"KPR / OSNet, 22 crops @ 5 Hz",5,6.6,batched 22 crops = 0.3 ms/crop,33.0
+Jersey OCR,"keyframe-selected crops, ~2 Hz",2,4.0,2-3 legible crops per tracklet,8.0

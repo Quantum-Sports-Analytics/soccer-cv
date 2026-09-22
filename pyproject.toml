@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soccer-cv"
+version = "0.1.0"
+description = "Broadcast football perception: players, ball, referee, field calibration, persistent identity."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy", "pandas", "pyarrow", "scipy", "opencv-python-headless", "pyyaml",
+  "tqdm", "scikit-learn", "networkx", "filterpy",
+]
+
+[project.optional-dependencies]
+gpu = ["torch", "torchvision", "rfdetr"]
+gcp = ["google-cloud-storage", "google-cloud-batch"]
+demo = ["fastapi", "uvicorn", "python-multipart", "jinja2"]
+dev = ["pytest"]
+
+[project.scripts]
+soccer-cv = "soccer_cv.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["soccer_cv*"]

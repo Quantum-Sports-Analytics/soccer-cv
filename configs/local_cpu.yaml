@@ -1,0 +1,52 @@
+runtime:
+  device: cpu
+  fp16: true
+  num_workers: 4
+ingest:
+  hist_cut_threshold: 0.35
+  min_shot_frames: 12
+  classify_every_n: 5
+detect:
+  model: rfdetr-small
+  resolution: 896
+  score_threshold: 0.3
+  tiles: none
+  person_min_height_px: 14
+calib:
+  enabled: false
+  smooth_window: 9
+track:
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.25
+  eiou_expansion: 0.3
+  appearance_weight: 0.35
+  occlusion_correct: true
+  cmc: conditional
+  margin_low: 0.15
+reid:
+  every_n_frames: 5
+  embed_dim: 128
+  torso_crop:
+  - 0.15
+  - 0.55
+mask_tier:
+  enabled: false
+  margin_trigger: 0.15
+ball:
+  score_threshold: 0.2
+  max_speed_px_per_frame: 90
+  max_gap_frames: 20
+identity:
+  team_clusters: 2
+  max_per_team: 11
+  link_max_gap_frames: 750
+  link_appearance_threshold: 0.45
+  abstain_below: 0.55
+ball3d:
+  enabled: false
+render:
+  show_confidence: true
+  show_reentry_flags: true
+  show_roster_panel: true
+  show_pitch_grid: true

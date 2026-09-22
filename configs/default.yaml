@@ -1,0 +1,63 @@
+# Default pipeline configuration. Every stage reads only its own block.
+# The hash of this file (minus `runtime`) is part of every cache key.
+
+runtime:
+  device: auto            # auto | cpu | cuda
+  fp16: true
+  num_workers: 4
+
+ingest:                   # stage 0
+  hist_cut_threshold: 0.35        # HSV-histogram L1 distance that declares a cut
+  min_shot_frames: 12
+  classify_every_n: 5
+
+detect:                   # stage 3
+  model: rfdetr-medium    # rfdetr-nano | rfdetr-small | rfdetr-medium | rfdetr-large
+  resolution: 960
+  score_threshold: 0.35
+  tiles: adaptive         # none | adaptive
+  person_min_height_px: 14
+
+calib:                    # stages 1-2  (stub until the keypoint model is trained)
+  enabled: false
+  smooth_window: 9
+
+track:                    # stage 4
+  max_age: 30             # frames a track survives without a detection
+  min_hits: 3
+  iou_threshold: 0.25
+  eiou_expansion: 0.3     # Deep-EIoU style expansion of boxes before IoU
+  appearance_weight: 0.35
+  occlusion_correct: true # OA-SORT style positional-cost correction
+  cmc: conditional        # off | conditional | always
+  margin_low: 0.15        # assignment margin below which a window is "ambiguous"
+
+reid:                     # stage 5
+  every_n_frames: 5
+  embed_dim: 128
+  torso_crop: [0.15, 0.55]   # vertical fraction of the box used for team colour
+
+mask_tier:                # stage 6 (quality tier) — off until SAM3 is wired
+  enabled: false
+  margin_trigger: 0.15
+
+ball:                     # stage 7
+  score_threshold: 0.20
+  max_speed_px_per_frame: 90
+  max_gap_frames: 20
+
+identity:                 # stages 8-10
+  team_clusters: 2
+  max_per_team: 11
+  link_max_gap_frames: 750      # 30 s at 25 fps
+  link_appearance_threshold: 0.45
+  abstain_below: 0.55           # CSIS-style: report unknown below this belief
+
+ball3d:                   # stage 11
+  enabled: false
+
+render:                   # stage 13
+  show_confidence: true
+  show_reentry_flags: true
+  show_roster_panel: true
+  show_pitch_grid: true

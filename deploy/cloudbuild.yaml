@@ -1,0 +1,17 @@
+# gcloud builds submit --config deploy/cloudbuild.yaml --substitutions=_REGION=europe-west4
+substitutions:
+  _REGION: europe-west4
+  _REPO: soccer-cv
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "deploy/docker/Dockerfile.tier_a",
+           "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/tier-a:latest", "."]
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "deploy/docker/Dockerfile.tier_bc",
+           "-t", "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/tier-bc:latest", "."]
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/tier-a:latest"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/tier-bc:latest"
+options:
+  machineType: E2_HIGHCPU_8
+timeout: 3600s
