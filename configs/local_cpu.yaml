@@ -35,8 +35,8 @@ reid:
   - 0.15
   - 0.55
   swap_window_frames: 100
-  swap_margin: 0.02
-  swap_motion_weight: 0.3
+  swap_margin: 0.04
+  swap_motion_weight: 0.1
 mask_tier:
   enabled: false
   margin_trigger: 0.15

@@ -70,6 +70,139 @@ def find_ambiguous_windows(tr: pd.DataFrame, margin_thr: float, iou_thr: float =
     return sorted(windows, key=lambda w: w["f0"])
 
 
+def current_ids(w: dict, raw: np.ndarray, tid: np.ndarray, frames: np.ndarray) -> dict:
+    """Windows are found on raw tracker ids; earlier relabels may have renamed them."""
+    out = dict(w)
+    for key in ("a", "b"):
+        m = (raw == w[key]) & (frames >= w["f0"]) & (frames <= w["f1"] + 30)
+        if m.any():
+            out[key] = int(tid[np.where(m)[0][0]])
+    return out
+
+
+def _unit(v):
+    return v / (np.linalg.norm(v) + 1e-9)
+
+
+def resolve_window(w: dict, tr: pd.DataFrame, tid: np.ndarray, frames: np.ndarray,
+                   emb_tid: np.ndarray, emb_frames: np.ndarray, E_all: np.ndarray,
+                   W: int, tau: float, w_motion: float) -> dict:
+    """Assign pre-window segments to post-window segments for one ambiguous window.
+
+    Participants = the two overlapping tracks plus any track that is *born* during
+    the window (or just after it) close to the crossing — that is how a lost player
+    re-appears under a new id. Cost = appearance (ReID cosine on pre/post segment
+    means); motion continuity only breaks near-ties, because in tackles and stops
+    it is not informative. Post-segments matched to a different pre-id are relabelled
+    from the window end onwards; a new-born track matched to a pre-id is relabelled
+    from its birth.
+    """
+    from scipy.optimize import linear_sum_assignment
+    a, b, f0, f1 = w["a"], w["b"], w["f0"], w["f1"]
+    x1 = tr.x1.to_numpy(); x2 = tr.x2.to_numpy(); y1 = tr.y1.to_numpy(); y2 = tr.y2.to_numpy()
+
+    def seg(t, lo, hi):
+        m = (emb_tid == t) & (emb_frames >= lo) & (emb_frames <= hi)
+        return _unit(E_all[m].mean(0)) if m.sum() else None
+
+    def foot_track(t, lo, hi):
+        m = (tid == t) & (frames >= lo) & (frames <= hi)
+        if m.sum() < 3:
+            return None
+        f = frames[m]; cx = (x1[m] + x2[m]) / 2; fy = y2[m]; h = float(np.median(y2[m] - y1[m]))
+        o = np.argsort(f); f, cx, fy = f[o], cx[o], fy[o]
+        vx, vy = np.polyfit(f, cx, 1)[0], np.polyfit(f, fy, 1)[0]
+        return dict(f=f, p0=np.array([cx[0], fy[0]]), p1=np.array([cx[-1], fy[-1]]), v=np.array([vx, vy]), h=max(h, 20.0))
+
+    # crossing region: union of a/b boxes inside the window
+    m_win = ((tid == a) | (tid == b)) & (frames >= f0) & (frames <= f1)
+    if not m_win.any():
+        return {"record": {**w, "decision": "undecidable", "margin": 0.0}, "relabels": [], "participants": [a, b], "conf": 0.3}
+    rx1, ry1, rx2, ry2 = x1[m_win].min(), y1[m_win].min(), x2[m_win].max(), y2[m_win].max()
+    rh = float(np.median(y2[m_win] - y1[m_win]))
+    # tracks born in [f0, f1 + 30] whose first box lies near the region
+    births = []
+    for t in np.unique(tid[(frames >= f0) & (frames <= f1 + 30)]):
+        if t in (a, b):
+            continue
+        mt = tid == t
+        fb = frames[mt].min()
+        if fb < f0:
+            continue
+        i = np.where(mt & (frames == fb))[0][0]
+        cx, fy = (x1[i] + x2[i]) / 2, y2[i]
+        if rx1 - rh <= cx <= rx2 + rh and ry1 - rh <= fy <= ry2 + rh:
+            births.append(int(t))
+    pre_ids = [t for t in (a, b) if seg(t, f0 - W, f0 - 1) is not None]
+    post_ids = [t for t in [a, b] + births if seg(t, f1 + 1, f1 + W) is not None]
+    if len(pre_ids) < 2 or len(post_ids) < 2:
+        return {"record": {**w, "decision": "undecidable", "margin": 0.0, "births": births}, "relabels": [], "participants": [a, b] + births, "conf": 0.3}
+    pre = {t: seg(t, f0 - W, f0 - 1) for t in pre_ids}; post = {t: seg(t, f1 + 1, f1 + W) for t in post_ids}
+    pre_m = {t: foot_track(t, f0 - 25, f0 - 1) for t in pre_ids}; post_m = {t: foot_track(t, f1 + 1, f1 + 25) for t in post_ids}
+    A = np.array([[float(pre[i] @ post[j]) for j in post_ids] for i in pre_ids])          # appearance
+    M = np.zeros_like(A)
+    for r, i in enumerate(pre_ids):
+        for c, j in enumerate(post_ids):
+            pm, qm = pre_m[i], post_m[j]
+            if pm is None or qm is None:
+                continue
+            gap = qm["f"][0] - pm["f"][-1]
+            pred = pm["p1"] + pm["v"] * gap
+            M[r, c] = float(np.exp(-np.linalg.norm(pred - qm["p0"]) / (pm["h"] * max(1.0, gap / 12.0))))
+    score = A + w_motion * M
+    r_idx, c_idx = linear_sum_assignment(-score)
+    best = float(score[r_idx, c_idx].sum())
+    # second best: force each chosen cell out in turn, take the best alternative assignment
+    second = -np.inf
+    for r, c in zip(r_idx, c_idx):
+        s2 = score.copy(); s2[r, c] = -1e3
+        rr, cc = linear_sum_assignment(-s2); second = max(second, float(s2[rr, cc].sum()))
+    margin = best - second if np.isfinite(second) else 1.0
+    # appearance-only view of the same decision, for the record
+    ra, ca = linear_sum_assignment(-A); app_best = float(A[ra, ca].sum())
+    identity = all(pre_ids[r] == post_ids[c] for r, c in zip(r_idx, c_idx))
+    relabels = []
+    if margin <= tau:
+        # Undecidable: do not assert continuity. Cut the overlapping tracks at the window end
+        # so their post-segments become fresh tracklets (Tier B may re-link them later with
+        # more evidence), and flag the window. A wrong identity costs more than a new one.
+        tmp_base = int(tid.max()) + 2000
+        for k, t in enumerate((a, b)):
+            if ((tid == t) & (frames > f1)).any():
+                relabels.append((t, tmp_base + k, f1 + 1))
+        rec = {**w, "decision": "split", "margin": round(float(margin), 4), "app_best": round(app_best, 4),
+               "pre": pre_ids, "post": post_ids, "births": births,
+               "assignment": [(int(pre_ids[r]), int(post_ids[c])) for r, c in zip(r_idx, c_idx)]}
+        return {"record": rec, "relabels": relabels, "participants": [a, b] + births, "conf": 0.3}
+    if not identity:
+        # apply: post-segment of post_ids[c] becomes pre_ids[r]
+        pairs = [(pre_ids[r], post_ids[c]) for r, c in zip(r_idx, c_idx)]
+        # two-phase relabel through temporary ids to avoid collisions
+        tmp_base = int(tid.max()) + 1000
+        for k, (pi, pj) in enumerate(pairs):
+            if pi != pj:
+                f_from = f1 + 1 if pj in (a, b) else int(frames[tid == pj].min())
+                relabels.append((pj, tmp_base + k, f_from))
+        for k, (pi, pj) in enumerate(pairs):
+            if pi != pj:
+                relabels.append((tmp_base + k, pi, 0))
+        # a pre-id whose own post-segment was given away and that received nothing keeps its
+        # orphaned continuation under a fresh id (it is a wrong continuation, not the same player)
+        given = {pj for pi, pj in pairs if pi != pj}
+        received = {pi for pi, pj in pairs if pi != pj}
+        for t in given - received:
+            if t in (a, b):
+                relabels.append((t, tmp_base + 500 + t, f1 + 1))
+        decision = "swap"
+    else:
+        decision = "keep"
+    conf = float(min(1.0, abs(margin) / (3 * tau)))
+    rec = {**w, "decision": decision, "margin": round(float(margin), 4), "app_best": round(app_best, 4),
+           "pre": pre_ids, "post": post_ids, "births": births,
+           "assignment": [(int(pre_ids[r]), int(post_ids[c])) for r, c in zip(r_idx, c_idx)]}
+    return {"record": rec, "relabels": relabels, "participants": [a, b] + births, "conf": conf}
+
+
 class ReIDStage(Stage):
     name = "s5_reid"
     config_key = "reid"
@@ -90,13 +223,21 @@ class ReIDStage(Stage):
         tau = float(p.get("swap_margin", 0.02))
         w_motion = float(p.get("swap_motion_weight", 0.3))
 
-        # ---- 1. embeddings at every_n_frames
-        enc = self.encoder or ReIDEncoder(device=self.cfg.get("runtime", {}).get("device", "auto"),
-                                          fp16=bool(self.cfg.get("runtime", {}).get("fp16", False)))
+        # ---- 1. embeddings at every_n_frames (cached on raw tracker ids: the expensive part)
+        import hashlib
+        key = hashlib.sha1(pd.util.hash_pandas_object(tr[["frame", "track_id", "x1", "y1", "x2", "y2"]], index=False).values.tobytes()).hexdigest()[:12] + f"-e{every}"
+        cache_uri = ctx.out("track_emb_raw.parquet"); cache_key_uri = ctx.out("track_emb_raw.key")
+        emb = None
+        if Storage.exists(cache_uri) and Storage.exists(cache_key_uri) and Storage.read_bytes(cache_key_uri).decode() == key:
+            c = Storage.read_df(cache_uri)
+            emb = pd.DataFrame({"frame": c.frame, "track_id": c.track_id, "emb": [np.asarray(json.loads(e), np.float32) for e in c.emb]})
+            log.info("reid %s: %d cached embeddings", self.shot_id, len(emb))
+        enc = None if emb is not None else (self.encoder or ReIDEncoder(device=self.cfg.get("runtime", {}).get("device", "auto"),
+                                          fp16=bool(self.cfg.get("runtime", {}).get("fp16", False))))
         video = Storage.localize(Storage.join(self.ingest_uri, "video.mp4"), ctx.workdir)
         by_frame = {int(k): g for k, g in tr.groupby("frame")}
         emb_rows = []
-        for i, frame in frames_iter(video, shot.start_frame, shot.end_frame):
+        for i, frame in (frames_iter(video, shot.start_frame, shot.end_frame) if emb is None else []):
             if (i - shot.start_frame) % every:
                 continue
             g = by_frame.get(i)
@@ -110,72 +251,33 @@ class ReIDStage(Stage):
                 emb_rows.append((i, int(tid), e.astype(np.float32)))
             if (i - shot.start_frame) % (every * 40) == 0:
                 log.info("reid %s frame %d", self.shot_id, i)
-        emb = pd.DataFrame(emb_rows, columns=["frame", "track_id", "emb"])
+        if emb is None:
+            emb = pd.DataFrame(emb_rows, columns=["frame", "track_id", "emb"])
+            Storage.write_df(cache_uri, pd.DataFrame({"frame": emb.frame, "track_id": emb.track_id,
+                                                      "emb": [json.dumps(np.round(e, 4).tolist()) for e in emb.emb]}))
+            Storage.write_bytes(cache_key_uri, key.encode())
 
         # ---- 2. ambiguous windows
         windows = find_ambiguous_windows(tr, margin_thr)
 
-        # ---- 3. keep-vs-swap decision per window, applied chronologically
+        # ---- 3. resolve each window as an assignment: pre-segments -> post-segments
         tr["swap_conf"] = 1.0
-        tid = tr.track_id.to_numpy().copy()
-        frames = tr.frame.to_numpy()
+        tid = tr.track_id.to_numpy().copy(); frames = tr.frame.to_numpy()
         emb_tid = emb.track_id.to_numpy().copy(); emb_frames = emb.frame.to_numpy()
         E_all = np.stack(emb.emb.to_numpy()) if len(emb) else np.zeros((0, 512), np.float32)
-
-        def seg_mean(t, f_lo, f_hi):
-            m = (emb_tid == t) & (emb_frames >= f_lo) & (emb_frames <= f_hi)
-            if m.sum() == 0:
-                return None
-            v = E_all[m].mean(0); return v / (np.linalg.norm(v) + 1e-9)
-
-        def foot_vel(t, f_lo, f_hi):
-            m = (tid == t) & (frames >= f_lo) & (frames <= f_hi)
-            if m.sum() < 3:
-                return None, None
-            sub = tr[m].sort_values("frame")
-            cx = ((sub.x1 + sub.x2) / 2).to_numpy(); fy = sub.y2.to_numpy(); f = sub.frame.to_numpy()
-            v = np.array([np.polyfit(f, cx, 1)[0], np.polyfit(f, fy, 1)[0]])
-            return np.array([cx[-1], fy[-1]]), v
-
-        decisions = []
-        n_swapped = 0
+        decisions, n_swapped, n_relabel = [], 0, 0
+        raw = tr.track_id.to_numpy()
         for w in windows:
-            a, b, f0, f1 = w["a"], w["b"], w["f0"], w["f1"]
-            # labels may already have been swapped by an earlier window: work on current ids
-            Apre, Bpre = seg_mean(a, f0 - W, f0 - 1), seg_mean(b, f0 - W, f0 - 1)
-            Apost, Bpost = seg_mean(a, f1 + 1, f1 + W), seg_mean(b, f1 + 1, f1 + W)
-            if any(x is None for x in (Apre, Bpre, Apost, Bpost)):
-                decisions.append({**w, "decision": "undecidable", "margin": 0.0}); continue
-            s_keep = float(Apre @ Apost + Bpre @ Bpost)
-            s_swap = float(Apre @ Bpost + Bpre @ Apost)
-            # motion continuity: extrapolate pre-window foot position/velocity to the first post frame
-            m_keep = m_swap = 0.0
-            pa, va = foot_vel(a, f0 - 25, f0 - 1); pb, vb = foot_vel(b, f0 - 25, f0 - 1)
-            qa, _ = foot_vel(a, f1 + 1, f1 + 25); qb, _ = foot_vel(b, f1 + 1, f1 + 25)
-            if all(x is not None for x in (pa, va, pb, vb, qa, qb)):
-                gap = f1 + 1 - (f0 - 1)
-                ea, eb = pa + va * gap, pb + vb * gap
-                h = float(tr[(tid == a) & (frames == f0 - 1)].y2.iloc[0] - tr[(tid == a) & (frames == f0 - 1)].y1.iloc[0]) if ((tid == a) & (frames == f0 - 1)).any() else 80.0
-                d = lambda u, v: float(np.exp(-np.linalg.norm(u - v) / max(h, 20.0)))
-                m_keep, m_swap = d(ea, qa) + d(eb, qb), d(ea, qb) + d(eb, qa)
-            score = (1 - w_motion) * (s_swap - s_keep) + w_motion * (m_swap - m_keep) * 0.5
-            conf = float(min(1.0, abs(score) / (3 * tau)))
-            if score > tau:
-                # swap ids of a and b for all frames after the window
-                post = frames > f1
-                ma, mb = post & (tid == a), post & (tid == b)
-                tid[ma], tid[mb] = b, a
-                epost = emb_frames > f1
-                ea_, eb_ = epost & (emb_tid == a), epost & (emb_tid == b)
-                emb_tid[ea_], emb_tid[eb_] = b, a
-                n_swapped += 1
-                decisions.append({**w, "decision": "swap", "margin": round(score, 4), "app": round(s_swap - s_keep, 4), "motion": round(m_swap - m_keep, 4)})
-            else:
-                decisions.append({**w, "decision": "keep", "margin": round(score, 4), "app": round(s_swap - s_keep, 4), "motion": round(m_swap - m_keep, 4)})
-            # confidence of the identity of both tracks right after the window
-            for t in (a, b):
-                m = (tid == t) & (frames > f1) & (frames <= f1 + W)
-                tr.loc[m, "swap_conf"] = np.minimum(tr.loc[m, "swap_conf"].to_numpy(), conf)
+            w = current_ids(w, raw, tid, frames)
+            res = resolve_window(w, tr, tid, frames, emb_tid, emb_frames, E_all, W, tau, w_motion)
+            decisions.append(res["record"])
+            for old, new_, f_from in res["relabels"]:
+                m = (tid == old) & (frames >= f_from); me = (emb_tid == old) & (emb_frames >= f_from)
+                tid[m] = new_; emb_tid[me] = new_; n_relabel += 1
+            n_swapped += int(res["record"]["decision"] == "swap")
+            for t in res["participants"]:
+                m = (tid == t) & (frames > w["f1"]) & (frames <= w["f1"] + W)
+                tr.loc[m, "swap_conf"] = np.minimum(tr.loc[m, "swap_conf"].to_numpy(), res["conf"])
 
         tr["track_id"] = tid
         emb["track_id"] = emb_tid
@@ -191,5 +293,6 @@ class ReIDStage(Stage):
             means.append({"track_id": int(t), "reid": json.dumps(np.round(v, 4).tolist()), "n": len(g)})
         Storage.write_df(ctx.out("track_reid.parquet"), pd.DataFrame(means))
         undec = sum(d["decision"] == "undecidable" for d in decisions)
-        return {"n_windows": len(windows), "n_swapped": n_swapped, "n_undecidable": undec,
+        nsplit = sum(d["decision"] == "split" for d in decisions)
+        return {"n_windows": len(windows), "n_swapped": n_swapped, "n_split": nsplit, "n_relabels": n_relabel, "n_undecidable": undec,
                 "n_emb": len(emb), "low_conf_frames": int((tr.swap_conf < 0.5).sum())}
