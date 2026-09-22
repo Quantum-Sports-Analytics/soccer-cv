@@ -285,17 +285,22 @@ class CalibStage(Stage):
             params, err, cov = fit_frame(masks[k], w_img, h_img, topk=int(p.get("topk", 6)))
             anchors.append((err, k, params, cov))
             log.info("calib %s anchor frame %d err %.1f cov %.2f", self.shot_id, keyframes[k], err, cov)
+        log.info("calib %s: propagating from frame %d", self.shot_id, keyframes[sorted(anchors)[0][1]])
         anchors.sort(key=lambda t: t[0])
         err0, k0, p0, cov0 = anchors[0]
         sol = {k0: (p0, err0, cov0)}
+        refit_gap = int(p.get("refit_every_keyframes", 20))
         for order in (range(k0 + 1, len(keyframes)), range(k0 - 1, -1, -1)):
-            prev = p0
+            prev, last_refit = p0, -10 ** 6
             for k in order:
                 params, err, cov = refine(prev, masks[k], w_img, h_img, iters=1)
-                if err > max_err * 1.5:                     # lost: try the other anchors' solutions, else refit
-                    alts = [refine(a_[2], masks[k], w_img, h_img, iters=1) for a_ in anchors[1:]]
-                    alts.append(fit_frame(masks[k], w_img, h_img, topk=4))
-                    params, err, cov = min(alts + [(params, err, cov)], key=lambda t: t[1])
+                if err > max_err * 1.5:                     # lost: cheap fallbacks first (other anchors,
+                    alts = [(params, err, cov)]              # all known solutions), full search rarely
+                    for a_ in anchors[1:]:
+                        alts.append(refine(a_[2], masks[k], w_img, h_img, iters=1))
+                    if abs(k - last_refit) >= refit_gap:
+                        alts.append(fit_frame(masks[k], w_img, h_img, topk=4)); last_refit = k
+                    params, err, cov = min(alts, key=lambda t: t[1])
                 sol[k] = (params, err, cov)
                 if err <= max_err:
                     prev = params

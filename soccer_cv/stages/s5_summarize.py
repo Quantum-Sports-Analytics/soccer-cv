@@ -71,10 +71,11 @@ class SummarizeStage(Stage):
             if H is not None:
                 for key, r in (("first_pitch_xy", first), ("last_pitch_xy", last)):
                     if int(r.frame) in H.index and bool(H.loc[int(r.frame), "valid"]):
-                        h = H.loc[int(r.frame), [f"h{i}{j}" for i in range(3) for j in range(3)]].to_numpy().reshape(3, 3)
+                        h = H.loc[int(r.frame), [f"h{k}" for k in range(9)]].to_numpy(dtype=float).reshape(3, 3)
                         foot = np.array([(r.x1 + r.x2) / 2, r.y2, 1.0])
                         p = h @ foot
                         row[key] = json.dumps([float(p[0] / p[2]), float(p[1] / p[2])])
+            row["calib_frac"] = float(H.loc[g.frame[g.frame.isin(H.index)], "valid"].mean()) if H is not None and g.frame.isin(H.index).any() else 0.0
             rows.append(row)
         df = pd.DataFrame(rows)
         Storage.write_df(ctx.out("tracklets.parquet"), df)

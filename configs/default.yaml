@@ -34,7 +34,8 @@ track:                    # stage 4
   team_gate: true         # forbid associating a track to a confident other-team detection
   team_ratio: 0.7         # detection is "confidently team i" if d_i < ratio * d_j
   team_refit_every: 100   # frames between refits of the online team model
-  pitch_filter: true      # reject detections whose feet are off the grass mask
+  pitch_filter: true      # reject detections whose feet are off the pitch (calibrated polygon, else grass mask)
+  pitch_margin_m: 1.0     # tolerance outside the touchlines, metres
 
 reid:                     # stage 5 — OSNet-AIN embeddings + ambiguous-crossing resolution
   enabled: true

@@ -109,6 +109,14 @@ class RenderStage(Stage):
         PANEL = 300 if p.get("show_roster_panel", True) else 0
 
         by_frame = {int(k): g for k, g in fused.groupby("frame")}
+        calib = {}
+        if p.get("show_pitch_grid", True):
+            from ..stages.s2_calib import load_calib, render_model
+            for u in Storage.list(Storage.join(root, "tier_a")):
+                if u.endswith("s2_calib/calib.parquet"):
+                    c = load_calib(u.rsplit("/", 1)[0])
+                    if c:
+                        calib.update(c)
         ball_by = ball.set_index("frame") if len(ball) else None
         roster_frames = np.sort(roster.frame.unique()) if len(roster) else np.array([])
         raw_path = ctx.workdir / "overlay_raw.mp4"
@@ -119,6 +127,12 @@ class RenderStage(Stage):
 
         for i, frame in frames_iter(video):
             canvas = np.zeros((H, W + PANEL, 3), dtype=np.uint8); canvas[:, :W] = frame
+            if i in calib:
+                grid = render_model(calib[i], W, H)
+                grid = cv2.dilate(grid, np.ones((2, 2), np.uint8))
+                canvas[:, :W][grid > 0] = (0.55 * canvas[:, :W][grid > 0] + 0.45 * np.array([80, 220, 255])).astype(np.uint8)
+            cv2.putText(canvas, "calib OK" if i in calib else "calib --", (W - 150, H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        (80, 220, 255) if i in calib else (120, 120, 120), 1)
             g = by_frame.get(i)
             n_abst = 0
             if g is not None:

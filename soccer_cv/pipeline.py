@@ -22,6 +22,7 @@ from .stages.s0_ingest import IngestStage, load_shots
 from .stages.s3_detect import DetectStage, build_detector
 from .stages.s4_track import TrackStage
 from .stages.s5_reid import ReIDStage
+from .stages.s2_calib import CalibStage
 from .stages.s5_summarize import SummarizeStage
 from .stages.s7_ball import BallStage
 from .tiers.tier_b_identity import IdentityTier
@@ -45,14 +46,18 @@ def run_tier_a_shot(run_uri: str, shot_id: str, cfg: dict, detector=None, replay
         detector = build_detector(cfg)
     st = DetectStage(cfg, shot_id, replay_uri=replay_uri, detector=detector if replay_uri is None else None)
     _append_manifest(run_uri, st.execute(ingest, Storage.join(base, "s3_detect")))
-    _append_manifest(run_uri, TrackStage(cfg, shot_id, ingest).execute(Storage.join(base, "s3_detect"), Storage.join(base, "s4_track")))
+    calib_uri = None
+    if cfg.get("calib", {}).get("enabled", True):
+        calib_uri = Storage.join(base, "s2_calib")
+        _append_manifest(run_uri, CalibStage(cfg, shot_id, ingest).execute(Storage.join(base, "s3_detect"), calib_uri))
+    _append_manifest(run_uri, TrackStage(cfg, shot_id, ingest, calib_uri=calib_uri).execute(Storage.join(base, "s3_detect"), Storage.join(base, "s4_track")))
     _append_manifest(run_uri, BallStage(cfg, shot_id, ingest).execute(Storage.join(base, "s3_detect"), Storage.join(base, "s7_ball")))
     if cfg.get("reid", {}).get("enabled", True):
         _append_manifest(run_uri, ReIDStage(cfg, shot_id, ingest, encoder=encoder).execute(Storage.join(base, "s4_track"), Storage.join(base, "s5_reid")))
         track_src = Storage.join(base, "s5_reid")
     else:
         track_src = Storage.join(base, "s4_track")
-    _append_manifest(run_uri, SummarizeStage(cfg, shot_id, app_uri=Storage.join(base, "s4_track")).execute(track_src, Storage.join(base, "s5_summarize")))
+    _append_manifest(run_uri, SummarizeStage(cfg, shot_id, calib_uri=calib_uri, app_uri=Storage.join(base, "s4_track")).execute(track_src, Storage.join(base, "s5_summarize")))
     return st.detector
 
 

@@ -33,6 +33,7 @@ from scipy.optimize import linear_sum_assignment
 from ..core import Stage, StageContext, Storage, frames_iter
 from ..schema import TRACK_COLUMNS, ObjClass
 from ..teams import OnlineTeamModel, pitch_mask, feet_on_pitch
+from .s2_calib import load_calib, pitch_polygon_mask
 
 log = logging.getLogger(__name__)
 
@@ -192,10 +193,11 @@ class TrackStage(Stage):
     name = "s4_track"
     config_key = "track"
 
-    def __init__(self, cfg: dict, shot_id: str, ingest_uri: str):
+    def __init__(self, cfg: dict, shot_id: str, ingest_uri: str, calib_uri: str | None = None):
         super().__init__(cfg)
         self.shot_id = shot_id
         self.ingest_uri = ingest_uri
+        self.calib_uri = calib_uri
 
     def run(self, ctx: StageContext) -> dict:
         from .s0_ingest import load_shots
@@ -218,12 +220,19 @@ class TrackStage(Stage):
         refit_every = int(p.get("team_refit_every", 100))
         use_pitch = bool(p.get("pitch_filter", True))
         n_off_pitch = 0
+        calib = load_calib(self.calib_uri) if self.calib_uri else None     # frame -> H (image <- pitch)
+        margin_m = float(p.get("pitch_margin_m", 1.0))
+        n_calib_frames = 0
 
         for i, frame in frames_iter(video, shot.start_frame, shot.end_frame):
             g = by_frame.get(i)
             d = g[["x1", "y1", "x2", "y2", "score"]].to_numpy(dtype=float) if g is not None else np.zeros((0, 5))
             if use_pitch and len(d):
-                keep = feet_on_pitch(pitch_mask(frame), d[:, :4])
+                if calib is not None and i in calib:
+                    pm = pitch_polygon_mask(calib[i], frame.shape[1], frame.shape[0], margin_m); n_calib_frames += 1
+                else:
+                    pm = pitch_mask(frame)
+                keep = feet_on_pitch(pm, d[:, :4])
                 n_off_pitch += int((~keep).sum()); d = d[keep]
             for t in tracks:
                 t.predict()
@@ -273,6 +282,7 @@ class TrackStage(Stage):
         n_frames = shot.end_frame - shot.start_frame + 1
         return {"n_tracks": int(df.track_id.nunique()) if len(df) else 0,
                 "off_pitch_rejected": n_off_pitch, "team_model_fitted": team_model.ready,
+                "calibrated_frames": n_calib_frames,
                 "tracks_per_frame": round(len(df) / max(n_frames, 1), 2),
                 "low_margin_frac": round(n_switch_risk / max(len(df), 1), 3),
                 "mean_track_len": round(float(df.groupby("track_id").size().mean()), 1) if len(df) else 0.0}
