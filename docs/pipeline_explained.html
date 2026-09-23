@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>soccer-cv — la pipeline expliquée étape par étape</title>
+<style>
+  :root { --bg:#fbfbfa; --panel:#ffffff; --ink:#1d2330; --muted:#5d6675; --line:#e3e5e8;
+          --a:#2f5c93; --a-bg:#e8eef7; --b:#2f6b42; --b-bg:#e6f1e9; --c:#5a4a86; --c-bg:#eeeaf5;
+          --warn:#8a5a00; --warn-bg:#fdf4e1; --ok:#23703f; --ok-bg:#e5f4ea; --code:#f3f4f6; }
+  * { box-sizing: border-box }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font: 16px/1.6 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 30px; line-height:1.2; margin: 0 0 6px }
+  h2 { font-size: 23px; margin: 48px 0 12px; padding-top: 12px; border-top: 1px solid var(--line) }
+  h3 { font-size: 19px; margin: 0 0 4px }
+  h4 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 6px }
+  p { margin: 8px 0 }
+  .lede { color: var(--muted); font-size: 17px; margin-bottom: 20px }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 14px }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 15px; background: var(--panel) }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top }
+  th { background: #f4f5f7; font-weight: 600 }
+  td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums }
+  nav.toc { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; margin: 18px 0 }
+  nav.toc ol { margin: 4px 0; padding-left: 22px; columns: 2; column-gap: 32px }
+  nav.toc a { color: var(--a); text-decoration: none }
+  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0 }
+  .status div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px }
+  .status b { display: block; font-size: 22px }
+  .status span { color: var(--muted); font-size: 14px }
+  .callout { border-left: 4px solid var(--warn); background: var(--warn-bg); padding: 10px 14px; border-radius: 6px; margin: 12px 0 }
+  .callout.ok { border-color: var(--ok); background: var(--ok-bg) }
+  /* flow diagram */
+  .flow { display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 14px; margin: 16px 0 6px }
+  .tier { border-radius: 12px; padding: 12px; border: 1.5px solid }
+  .tier.a { background: var(--a-bg); border-color: var(--a) }
+  .tier.b { background: var(--b-bg); border-color: var(--b) }
+  .tier.c { background: var(--c-bg); border-color: var(--c) }
+  .tier .t { font-weight: 700; font-size: 14px; margin-bottom: 2px }
+  .tier .w { font-size: 13px; color: var(--muted); margin-bottom: 8px }
+  .steps { display: flex; flex-direction: column; gap: 6px }
+  .step { background: #fff; border-radius: 7px; padding: 6px 10px; font-size: 14px; border: 1px solid var(--line) }
+  .step a { color: var(--ink); text-decoration: none }
+  .step small { color: var(--muted) }
+  .arrowrow { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 8px }
+  /* stage cards */
+  .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 18px 0 }
+  .stage.a { border-top: 5px solid var(--a) } .stage.b { border-top: 5px solid var(--b) } .stage.c { border-top: 5px solid var(--c) }
+  .stage .meta { color: var(--muted); font-size: 14px; margin-bottom: 8px }
+  .simple { background: #f7f8fa; border-radius: 8px; padding: 10px 14px; margin: 10px 0 }
+  .simple::before { content: "En simple — "; font-weight: 700 }
+  .diff { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 8px 0 }
+  .diff > div { padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 15px }
+  .diff > div:nth-child(odd) { background: #fff7f5; border-right: 1px solid var(--line) }
+  .diff > div:nth-child(even) { background: #f5fbf7 }
+  .diff > .h { font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted) }
+  .measured { font-size: 14px; color: var(--muted); margin-top: 8px }
+  .measured b { color: var(--ink) }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 10px; margin-left: 6px; vertical-align: 2px }
+  .tag.ok { background: var(--ok-bg); color: var(--ok) } .tag.todo { background: var(--warn-bg); color: var(--warn) }
+  footer { margin-top: 60px; color: var(--muted); font-size: 13px }
+  @media (max-width: 800px) { .flow { grid-template-columns: 1fr } nav.toc ol { columns: 1 } .diff { grid-template-columns: 1fr } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>soccer-cv — la pipeline expliquée étape par étape</h1>
+<p class="lede">À partir d'une vidéo de broadcast TV : suivre les joueurs, l'arbitre et le ballon, et replacer tout le monde sur le terrain.
+Chaque étape est expliquée deux fois : en langage simple, puis pour un ingénieur (méthode, paramètres).
+On y trouve aussi les difficultés rencontrées pendant le développement et la façon dont on les a traitées.</p>
+
+<div class="status">
+  <div><b>Bout en bout sur GPU</b><span>Plateforme → job Cloud Run L4 → overlay, validé le 22/09</span></div>
+  <div><b>40 s</b><span>de détection pour 40 s de vidéo sur une L4 (temps réel)</span></div>
+  <div><b>13 / 13</b><span>croisements ambigus du clip de test tranchés correctement ou marqués « incertain » (validés à l'œil)</span></div>
+  <div><b>1,5 px</b><span>erreur médiane de calibration terrain (97,5 % des images clés valides)</span></div>
+</div>
+
+<nav class="toc">
+<strong>Sommaire</strong>
+<ol>
+  <li><a href="#vue">Vue d'ensemble</a></li>
+  <li><a href="#s0">Découpage en plans</a></li>
+  <li><a href="#s3">Détection</a></li>
+  <li><a href="#s2">Calibration du terrain</a></li>
+  <li><a href="#s4">Suivi image par image</a></li>
+  <li><a href="#s7">Ballon</a></li>
+  <li><a href="#s5">Croisements et ré-identification</a></li>
+  <li><a href="#s5b">Résumés de pistes</a></li>
+  <li><a href="#tb">Identité sur tout le match</a></li>
+  <li><a href="#tc">Fusion et overlay</a></li>
+  <li><a href="#infra">Infrastructure GCP et plateforme</a></li>
+  <li><a href="#transverse">Les grandes difficultés du sujet</a></li>
+  <li><a href="#limites">Limites actuelles et suite</a></li>
+</ol>
+</nav>
+
+<!-- ================================================================== -->
+<h2 id="vue">1. Vue d'ensemble</h2>
+
+<p>Une vidéo de match se compose de <strong>plans</strong> : la caméra principale, puis un gros plan, un ralenti, et de nouveau la caméra principale.
+À l'intérieur d'un plan la caméra bouge de façon continue, ce qui permet de suivre les joueurs image par image.
+Entre deux plans, cette continuité est perdue. La pipeline est donc découpée en trois niveaux (« tiers ») :</p>
+
+<div class="flow">
+  <div class="tier a">
+    <div class="t">Tier A — par plan, sur GPU</div>
+    <div class="w">Un job GPU par plan caméra, en parallèle (jusqu'à 15 L4)</div>
+    <div class="steps">
+      <div class="step"><a href="#s3"><b>Détection</b> <small>— qui est où dans l'image</small></a></div>
+      <div class="step"><a href="#s2"><b>Calibration</b> <small>— pixels → mètres</small></a></div>
+      <div class="step"><a href="#s4"><b>Suivi</b> <small>— relier les boîtes dans le temps</small></a></div>
+      <div class="step"><a href="#s7"><b>Ballon</b> <small>— trajectoire et état</small></a></div>
+      <div class="step"><a href="#s5"><b>Croisements</b> <small>— corriger les échanges d'identité</small></a></div>
+      <div class="step"><a href="#s5b"><b>Résumés</b> <small>— une fiche par piste</small></a></div>
+    </div>
+  </div>
+  <div class="tier b">
+    <div class="t">Tier B — sur tout le match</div>
+    <div class="w">CPU, ne lit que les fiches (aucun pixel)</div>
+    <div class="steps">
+      <div class="step"><a href="#tb"><b>Équipes</b> <small>— regroupement par couleur</small></a></div>
+      <div class="step"><a href="#tb"><b>Recollage</b> <small>— même joueur après une sortie de champ</small></a></div>
+      <div class="step"><a href="#tb"><b>Contraintes</b> <small>— au plus 11 par équipe</small></a></div>
+    </div>
+  </div>
+  <div class="tier c">
+    <div class="t">Tier C — restitution</div>
+    <div class="w">CPU</div>
+    <div class="steps">
+      <div class="step"><a href="#tc"><b>Fusion</b> <small>— une ligne par joueur et par image</small></a></div>
+      <div class="step"><a href="#tc"><b>Overlay</b> <small>— la vidéo annotée</small></a></div>
+    </div>
+  </div>
+</div>
+<div class="arrowrow">avant tout : <a href="#s0">découpage en plans</a> (CPU) &nbsp;·&nbsp; Tier A → Tier B → Tier C</div>
+
+<p><strong>Pourquoi ce découpage.</strong> Le coûteux (réseaux de neurones sur chaque image) est isolé dans le Tier A.
+Chaque plan y est un calcul indépendant, donc on parallélise autant qu'on a de GPU.
+Le difficile (reconnaître un joueur qui revient 20 s plus tard) demande de voir tout le match, mais ne porte que sur quelques centaines de fiches : c'est le Tier B, sur CPU, en moins d'une seconde.
+Chaque étape lit et écrit des fichiers (<code>parquet</code>, <code>json</code>) dans un dossier de run, en local ou sur <code>gs://</code>.
+Une étape déjà faite n'est pas refaite (fichiers <code>_DONE_&lt;étape&gt;.json</code>), ce qui rend une relance sans risque.</p>
+
+<p><strong>Un principe tenu partout : mieux vaut dire « je ne sais pas » que se tromper avec assurance.</strong>
+Quand un indice ne permet pas de trancher, la pipeline <em>s'abstient</em> : elle coupe la piste, affiche un <code>?</code> ou marque la décision comme peu sûre.
+Une identité fausse présentée comme vraie est l'erreur la plus coûteuse pour tout ce qui est construit ensuite (statistiques par joueur, analyse tactique).</p>
+
+<!-- ================================================================== -->
+<h2 id="etapes">Les étapes</h2>
+
+<section class="stage a" id="s0">
+  <h3>Étape 0 — Découpage en plans <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s0_ingest.py</code> · CPU</div>
+  <div class="simple">On repère les moments où la réalisation change de caméra, pour découper la vidéo en morceaux continus. Chaque morceau sera traité séparément.</div>
+  <h4>Pour l'ingénieur</h4>
+  <p>Histogramme HSV de chaque image réduite. Une <strong>coupure</strong> est déclarée quand la distance L1 entre deux histogrammes consécutifs dépasse <code>hist_cut_threshold = 0.35</code>.
+  Les coupures trop rapprochées (fondus, flashs) sont fusionnées, avec au minimum 12 images par plan.
+  Un type de plan est estimé (part de vert, densité de contours) pour distinguer la caméra principale des gros plans et des graphiques.
+  Sortie : <code>shots.json</code> (liste des plans, l'unité de parallélisme du Tier A) et <code>meta.json</code> (fps, taille, nombre d'images <em>décodées</em>, pas celui annoncé par le conteneur).</p>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Suivre à travers une coupure de caméra produit des associations absurdes : un joueur « se téléporte ».</div>
+    <div>Le suivi ne franchit jamais une coupure. La continuité entre plans est reconstruite plus tard, par l'apparence, dans le Tier B.</div>
+    <div>Les ralentis, gros plans et incrustations ne sont pas des vues tactiques.</div>
+    <div>Classification heuristique du type de plan. Elle est encore sommaire : à remplacer par un petit classifieur (voir <a href="#limites">limites</a>).</div>
+  </div>
+</section>
+
+<section class="stage a" id="s3">
+  <h3>Étape 3 — Détection des personnes et du ballon <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s3_detect.py</code> · GPU</div>
+  <div class="simple">Sur chaque image, un réseau de neurones entoure d'une boîte chaque personne et le ballon.</div>
+  <h4>Pour l'ingénieur</h4>
+  <p>Détecteur <strong>RF-DETR</strong> (transformer de détection, licence Apache-2.0), pré-entraîné COCO. Les classes <code>person</code> et <code>sports ball</code> sont reprises telles quelles.
+  Le rôle (joueur, gardien, arbitre) <em>n'est pas</em> demandé au détecteur : il est déduit plus tard des couleurs.
+  Configuration GPU actuelle (<code>configs/gpu_l4.yaml</code>) : RF-DETR <em>small</em>, entrée 896 px, seuil 0,30.
+  Un mode de découpage adaptatif (« tiles ») ré-analyse en zoom la moitié haute du terrain quand des joueurs y sont trop petits. Il est prévu mais désactivé dans la config GPU actuelle.</p>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Joueurs du côté lointain de 20 à 30 px de haut, ballon de quelques pixels.</div>
+    <div>Résolution d'entrée élevée (896 px). Découpage adaptatif de la moitié lointaine prêt à activer, qui ne coûte que lorsque des petits joueurs sont présents.</div>
+    <div>Aucun modèle « football » libre de droits prêt à l'emploi.</div>
+    <div>Modèle générique sans réentraînement pour valider l'architecture. Un réentraînement sur nos images est un gain identifié, pas un prérequis.</div>
+    <div>En mêlée, deux joueurs peuvent donner une seule boîte, ou une boîte à cheval sur deux corps.</div>
+    <div>Traité en aval : le suivi mesure le recouvrement entre boîtes et s'en méfie (<a href="#s4">étape 4</a>), et les croisements sont revérifiés (<a href="#s5">étape 5</a>).</div>
+  </div>
+  <p class="measured">Mesuré : <b>40 s pour 40 s de vidéo</b> sur L4 (1 000 images, soit environ 25 images/s). Sur CPU : 70 s pour 100 images, donc la L4 va 8,5 fois plus vite.</p>
+</section>
+
+<section class="stage a" id="s2">
+  <h3>Étapes 1–2 — Calibration du terrain <span class="tag ok">en place</span> <span class="tag todo">goulot de temps</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s2_calib.py</code> · CPU (dans la tâche GPU)</div>
+  <div class="simple">On retrouve où se trouve la caméra et vers où elle regarde, en superposant un terrain de football théorique sur les lignes blanches visibles. Cela permet de traduire « ce joueur est au pixel (812, 430) » en « ce joueur est à 12 m de la ligne médiane ».</div>
+  <h4>Pour l'ingénieur</h4>
+  <p><strong>Méthode classique, sans modèle appris</strong> : aucun modèle de points clés du terrain n'était disponible sous licence libre.</p>
+  <ol>
+    <li><strong>Lignes détectées</strong> : masque des pixels blancs restreint à la pelouse (masque vert érodé pour exclure panneaux et tribunes), avec les boîtes des joueurs masquées.</li>
+    <li><strong>Modèle de caméra</strong> : caméra de broadcast paramétrée par position (x, y, z), orientation horizontale (pan), verticale (tilt) et focale, roulis nul. Le terrain FIFA (105 × 68 m) est projeté par ce modèle.</li>
+    <li><strong>Coût</strong> : distance de chanfrein symétrique tronquée. On mesure à la fois « les lignes du modèle tombent-elles sur des lignes détectées ? » (image de distance) et « les lignes détectées sont-elles expliquées par le modèle ? » (plus proche voisin par KD-tree).</li>
+    <li><strong>Recherche</strong> : grille grossière en quart de résolution → descente locale depuis les 60 meilleurs départs → affinage en demi-résolution. La caméra est cherchée côté tribune principale uniquement : le terrain est symétrique, et c'est la convention TV, ce qui fixe aussi le sens gauche / droite.</li>
+    <li><strong>Deux passes</strong> : (1) propagation image clé par image clé (1 par seconde) depuis la meilleure ; (2) la caméra principale ne se déplace pas pendant un plan, donc sa position est fixée à la médiane et seules pan, tilt et focale sont réajustées (3 degrés de liberté au lieu de 6).</li>
+    <li><strong>Validité</strong> : une image clé est acceptée si au moins 30 % du modèle visible colle à une ligne, si au moins 30 % des lignes détectées sont expliquées, et si l'erreur est d'au plus 3,5 px. Sinon elle est déclarée non calibrée plutôt que fausse. Entre deux images clés, les paramètres sont interpolés.</li>
+  </ol>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Beaucoup de minima locaux : une vue de surface de réparation « colle » aussi à un autre endroit du terrain.</div>
+    <div>Départs multiples (60 graines), coût symétrique, et propagation depuis l'image clé la plus sûre plutôt qu'un calcul indépendant par image.</div>
+    <div>Une solution dégénérée (une seule ligne de touche dans le champ) obtenait un bon score.</div>
+    <div>Deuxième critère de validité : la part des lignes détectées expliquées par le modèle. Une solution qui n'explique qu'une ligne est rejetée.</div>
+    <div>Lignes publicitaires, tribunes, logos blancs pris pour des lignes.</div>
+    <div>Masque de pelouse érodé, joueurs masqués, coût tronqué pour que les faux pixels ne dominent pas.</div>
+    <div>Images où trop peu de lignes sont visibles (milieu de terrain en gros plan).</div>
+    <div>Position caméra fixée par plan (passe 2) : 3 paramètres restent à trouver, et 9 images clés perdues ont été récupérées (39/40 valides au lieu de 30/40).</div>
+  </div>
+  <p class="measured">Mesuré (clip 40 s) : <b>97,5 % des images clés valides, erreur médiane 1,5 px</b>. Coût : <b>356 s pour 40 s de vidéo</b> (8,9 fois la durée), sur CPU pur. <b>C'est aujourd'hui le seul goulot de temps.</b> Les pistes pour le réduire sont dans <code>docs/IMPROVEMENTS.md</code>.</p>
+</section>
+
+<section class="stage a" id="s4">
+  <h3>Étape 4 — Suivi image par image <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s4_track.py</code> · CPU (dans la tâche GPU)</div>
+  <div class="simple">On relie les boîtes d'une image à la suivante pour former des « pistes » : cette boîte-ci est la même personne que celle de l'image précédente. On retire aussi toute personne dont les pieds sont hors du terrain.</div>
+  <h4>Pour l'ingénieur</h4>
+  <ul>
+    <li><strong>Prédiction</strong> : filtre de Kalman à vitesse constante sur (centre, largeur, hauteur).</li>
+    <li><strong>Association</strong> : algorithme hongrois en deux passes, détections sûres puis détections faibles (principe ByteTrack). Le coût combine :
+      <ul>
+        <li>un IoU <em>élargi</em> (boîtes grossies de 30 %, idée Deep-EIoU) pour les joueurs rapides ;</li>
+        <li>une apparence couleur du torse pondérée à 0,35.</li>
+      </ul></li>
+    <li><strong>Correction d'occlusion</strong> (idée OA-SORT) : pour chaque boîte on mesure son recouvrement par les autres. Une boîte très recouverte a une position peu fiable, donc son coût positionnel est adouci et son apparence compte davantage.</li>
+    <li><strong>Garde-fou équipes</strong> : un modèle de couleurs des deux équipes, appris en ligne et réajusté toutes les 100 images, <strong>interdit</strong> d'associer une piste à une détection clairement de l'autre équipe (test de rapport, seuil 0,7).</li>
+    <li><strong>Marge d'assignation</strong> : pour chaque lien, on enregistre l'écart entre le meilleur choix et le deuxième. Une marge faible (inférieure à 0,15) signale un lien douteux, exploité à l'étape 5.</li>
+    <li><strong>Filtre hors terrain</strong> : les pieds de chaque personne sont projetés en mètres sur le terrain grâce à la calibration. Une personne est gardée seulement si ses pieds sont à l'intérieur des lignes, avec 1 m de tolérance. Quand la calibration manque, un masque de pelouse sert de secours.</li>
+  </ul>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Échanges d'identité entre joueurs <em>d'équipes différentes</em> qui se croisent (signalés sur le clip vers 11 s).</div>
+    <div>Garde-fou dur par couleur d'équipe : le croisement de deux adversaires ne peut plus produire d'échange.</div>
+    <div>Position mensongère sous occlusion partielle : la boîte visible n'est pas centrée sur le joueur.</div>
+    <div>Coût positionnel adouci selon le recouvrement mesuré (OA-SORT), et apparence pondérée par la visibilité.</div>
+    <div>Coachs et staff en bord de touche suivis et rangés dans une équipe.</div>
+    <div>Filtre des pieds en mètres grâce à la calibration. La règle produit retenue : personne hors du terrain n'est suivi, arbitres assistants compris.</div>
+    <div>Coachs encore visibles à 37 s : leurs boîtes étaient <em>coupées par le bas de l'image</em>, donc le bas de la boîte était le bord de l'image et non leurs pieds (mesuré à −33,9 m, juste à l'intérieur de la ligne à −34 m).</div>
+    <div>Pour une boîte tronquée, les pieds sont reconstruits par la géométrie : on cherche le point du sol dont la tête, 1,80 m plus haut, se projette sur le haut de la boîte. Les coachs se retrouvent à −35,3 / −35,6 m et sont filtrés.</div>
+    <div>Les mouvements de caméra (panoramiques) faussent les vitesses mesurées en pixels.</div>
+    <div>Les décisions délicates ne s'appuient pas sur la vitesse en pixels (voir étape 5). À terme, le suivi se fera en mètres grâce à la calibration.</div>
+  </div>
+  <p class="measured">Mesuré (clip 40 s) : 9 s. Environ 17 personnes suivies par image, 0,8 % de liens à marge faible.</p>
+</section>
+
+<section class="stage a" id="s7">
+  <h3>Étape 7 — Ballon <span class="tag ok">première version</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s7_ball.py</code> · CPU</div>
+  <div class="simple">On garde une seule position de ballon par image, cohérente avec son mouvement, et on dit honnêtement quand il est vu, caché ou perdu.</div>
+  <h4>Pour l'ingénieur</h4>
+  <p>Machine à états sur les détections « ballon » :</p>
+  <ul>
+    <li>un candidat n'est accepté que s'il reste atteignable depuis la dernière position (vitesse maximale 90 px/image, multipliée par le nombre d'images écoulées) ;</li>
+    <li>entre plusieurs candidats, on garde le plus proche de la prédiction à vitesse constante ;</li>
+    <li>les trous de 20 images ou moins sont interpolés et marqués <code>OCCLUDED</code>, les plus longs <code>UNKNOWN</code> ;</li>
+    <li><code>IN_FLIGHT</code> quand l'accélération verticale sur 5 images a une forme de parabole ;</li>
+    <li><code>OUT_OF_FRAME</code> quand le ballon disparaît au bord de l'image.</li>
+  </ul>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Ballon minuscule, flou de mouvement, souvent caché par un pied ou un corps.</div>
+    <div>États explicites plutôt qu'une position inventée. Un détecteur spécialisé, qui exploite le mouvement sur plusieurs images (famille TrackNet), se branchera à l'étape 3 sans rien changer ici.</div>
+    <div>Faux positifs (tête chauve, chaussure, point blanc de la pelouse).</div>
+    <div>Test d'atteignabilité : un « ballon » qui sauterait de 300 px est rejeté.</div>
+  </div>
+  <p class="measured">Mesuré : ballon localisé sur 97,6 % des images du clip de test lors du premier passage complet, dont environ 15 % par interpolation sous occlusion.</p>
+</section>
+
+<section class="stage a" id="s5">
+  <h3>Étape 5 — Croisements et ré-identification <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s5_reid.py</code>, <code>soccer_cv/reid.py</code> · GPU</div>
+  <div class="simple">Quand deux coéquipiers se croisent, ils portent le même maillot et le suivi peut les intervertir. On compare leur allure <em>avant</em> et <em>après</em> le croisement pour vérifier s'il y a eu échange, et on le corrige. Si on n'arrive pas à savoir, on le dit.</div>
+  <h4>Pour l'ingénieur</h4>
+  <ol>
+    <li><strong>Fenêtres ambiguës</strong> : paires de pistes dont les boîtes se recouvrent pendant qu'au moins un lien a une marge faible (signal fourni par l'étape 4).</li>
+    <li><strong>Empreintes d'apparence</strong> : réseau <strong>OSNet-AIN</strong> (MSMT17, licence MIT, 512 dimensions), toutes les 5 images, pour chaque piste. La variante AIN généralise bien à un nouveau domaine, ce qui explique qu'elle marche sur du football sans réentraînement.</li>
+    <li><strong>Décision</strong> : pour chaque fenêtre, on compare les hypothèses (garder / échanger / une piste née pendant la mêlée), sur 100 images de part et d'autre. Deux termes, exprimés en <em>nats</em> (logarithme de vraisemblance) pour pouvoir s'additionner :
+      <ul>
+        <li><strong>apparence</strong> : similarité des empreintes avant / après ;</li>
+        <li><strong>physique</strong> : la position et la vitesse d'entrée de chaque joueur sont extrapolées. Leur incertitude est le rayon qu'un humain peut atteindre dans le temps écoulé, ½·a<sub>max</sub>·Δt², avec v<sub>max</sub> = 9,5 m/s et a<sub>max</sub> = 7 m/s², convertis en pixels via la taille du joueur.</li>
+      </ul></li>
+    <li>La meilleure hypothèse est appliquée si elle bat la seconde d'<strong>au moins 1,5 nat</strong>. Sinon les pistes sont <strong>coupées</strong> (« split ») et marquées peu sûres, et le Tier B tranchera avec plus de recul.</li>
+  </ol>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Même maillot : la couleur ne distingue pas deux coéquipiers.</div>
+    <div>Empreinte ReID apprise (silhouette, morphologie, détails), moyennée sur des dizaines d'images nettes autour de la fenêtre et non sur l'image floue du croisement.</div>
+    <div>La vitesse mesurée <em>pendant</em> un tacle est inutilisable. On a mesuré 46 px/image² d'accélération pour un corps de 76 px, 80 fois plus que physiquement possible : c'est la boîte qui saute d'un corps à l'autre, pas le joueur.</div>
+    <div>On n'utilise pas la vitesse <em>dans</em> la fenêtre. On extrapole celle d'<em>avant</em> vers <em>après</em>, avec une incertitude qui grandit comme Δt². Pour un croisement bref (2 à 7 images), la physique tranche seule. Pour un enchevêtrement long (≈ 1 s), elle devient neutre d'elle-même, sans réglage, et l'apparence décide.</div>
+    <div>Une décision forcée sur un cas indécidable crée une erreur durable et invisible.</div>
+    <div>Abstention explicite : piste coupée, recollée plus tard seulement si l'apparence accumulée le permet.</div>
+  </div>
+  <p class="measured">Mesuré sur le clip de test : <b>13 fenêtres ambiguës</b>, toutes validées à l'œil (1 échange corrigé, 2 coupures recollées correctement par le Tier B, les autres conservées ou marquées indécidables). Avec la physique, les croisements brefs passent de marges de 0,06–0,17 (apparence seule) à 5–26 nats. Temps : 16 s pour 40 s de vidéo sur L4.</p>
+</section>
+
+<section class="stage a" id="s5b">
+  <h3>Étape 5b — Résumés de pistes <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/stages/s5_summarize.py</code> · CPU</div>
+  <div class="simple">Chaque piste est résumée en une fiche : à quoi ressemble ce joueur, où il apparaît, où il disparaît. Ensuite, on ne travaille plus que sur ces fiches.</div>
+  <h4>Pour l'ingénieur</h4>
+  <p>Une ligne par piste dans <code>tracklets.parquet</code> :</p>
+  <ul>
+    <li>apparence couleur pondérée par la visibilité, et empreinte ReID moyenne ;</li>
+    <li>première et dernière boîte, positions sur le terrain en mètres quand la calibration est valide ;</li>
+    <li>qualité : marge moyenne, part du temps occulté ;</li>
+    <li>part du temps passé hors des lignes.</li>
+  </ul>
+  <p><strong>C'est la frontière Tier A → Tier B : aucun pixel ne la traverse.</strong> Le Tier B tourne donc en moins d'une seconde, même sur un match entier.</p>
+</section>
+
+<section class="stage b" id="tb">
+  <h3>Tier B — Identité sur tout le match <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/tiers/tier_b_identity.py</code> · CPU</div>
+  <div class="simple">On range les fiches par équipe, puis on recolle celles qui appartiennent au même joueur : celui qui sort du champ de la caméra et revient 20 s plus tard doit retrouver <em>son</em> numéro, pas en recevoir un nouveau.</div>
+  <h4>Pour l'ingénieur</h4>
+  <ol>
+    <li><strong>Équipes et rôles</strong> : k-means sur les couleurs en 2 équipes + 1 groupe « autre » (arbitre). Les groupes sont <em>relatifs</em> : aucun dictionnaire de maillots n'est nécessaire, donc la méthode marche sur n'importe quel match.</li>
+    <li><strong>Graphe de pistes</strong> : un lien A → B est candidat si B commence après la fin de A, dans la même équipe, avec un écart d'au plus 30 s et des empreintes proches. Son poids combine apparence, écart temporel et plausibilité spatiale.</li>
+    <li><strong>Assignation</strong> : chaînage glouton par confiance maximale, sous contrainte de non-chevauchement dans le temps, puis contrainte de <strong>cardinalité</strong> : au plus 11 identités visibles par équipe à chaque image.</li>
+    <li><strong>Abstention</strong> : une piste dont le meilleur lien a une confiance inférieure à 0,55 reçoit un <code>?</code> plutôt qu'une identité devinée.</li>
+    <li><strong>Filet de sécurité hors terrain</strong> : une piste qui passe au moins 70 % de son temps au-delà des lignes est retirée.</li>
+  </ol>
+  <h4>Difficultés → réponses</h4>
+  <div class="diff">
+    <div class="h">Difficulté</div><div class="h">Réponse</div>
+    <div>Ré-identifier un joueur après une sortie de champ, sans numéro de maillot (choix produit : pas d'OCR).</div>
+    <div>Empreintes ReID accumulées sur toute la piste, et contrainte de cardinalité. C'est l'indice le moins cher et le plus informatif : il ne peut pas y avoir 12 joueurs d'une même équipe à l'écran.</div>
+    <div>Un nouveau numéro créé à chaque petite coupure de piste (ids 37 à 58 lors du premier passage).</div>
+    <div>Recollage des coupures issues de l'étape 5 par assignation conjointe, avec une marge minimale entre la meilleure et la deuxième hypothèse.</div>
+    <div>Couleurs d'équipe propres à chaque match.</div>
+    <div>Groupement relatif sur les couleurs du torse, pelouse masquée. Aucun vocabulaire de maillot n'est codé en dur.</div>
+  </div>
+  <p class="measured">Mesuré (clip 40 s) : 62 pistes → 32 identités, 30 recollages, 11 identités dans une équipe, 0 image violant la contrainte de cardinalité, 6 pistes marquées incertaines. Temps : moins d'une seconde.</p>
+</section>
+
+<section class="stage c" id="tc">
+  <h3>Tier C — Fusion et overlay <span class="tag ok">en place</span></h3>
+  <div class="meta"><code>soccer_cv/tiers/tier_c_render.py</code> · CPU</div>
+  <div class="simple">On produit la vidéo annotée : une boîte colorée par équipe avec son numéro, le ballon, les lignes du terrain et un tableau de l'effectif. C'est elle qui permet de juger la qualité à l'œil.</div>
+  <h4>Pour l'ingénieur</h4>
+  <p><code>fused.parquet</code> : une ligne par identité visible et par image (boîte, équipe, identité, confiance, position terrain). L'overlay montre volontairement ce qu'un tableau de métriques cacherait :</p>
+  <ul>
+    <li>couleur = équipe, intensité = confiance, <code>?</code> gris = identité non attribuée ;</li>
+    <li>flash « ↩ #id » quand un joueur revient après une absence ;</li>
+    <li>état du ballon (vu / interpolé / en vol) ;</li>
+    <li>lignes du terrain projetées, avec le témoin « calib OK » ;</li>
+    <li>panneau d'effectif : visible / hors champ / incertain, et depuis combien de temps.</li>
+  </ul>
+  <p>L'overlay est le critère d'acceptation retenu sur nos propres vidéos, qui n'ont pas de vérité terrain.</p>
+</section>
+
+<!-- ================================================================== -->
+<h2 id="infra">Infrastructure GCP et plateforme de démo</h2>
+
+<div class="simple">On envoie une vidéo depuis une page web. Un GPU est loué dans le cloud le temps du calcul, puis rendu, et la vidéo annotée s'affiche dans le navigateur.</div>
+
+<table>
+  <tr><th>Élément</th><th>Service GCP</th><th>Rôle</th></tr>
+  <tr><td>Plateforme web</td><td>Cloud Run <em>service</em> <code>soccer-cv-demo</code> (CPU, 2 vCPU, 4 Go)</td><td>Page d'envoi, historique des vidéos, lecteur overlay / original, fiche qualité, tableau des croisements, voyant GPU, annulation. Elle orchestre aussi chaque calcul : découpage, Tier B, Tier C.</td></tr>
+  <tr><td>Calcul GPU</td><td>Cloud Run <em>jobs</em> <code>scv-tiera-*</code>, 1 NVIDIA L4 par plan</td><td>Tier A. Le job est créé à la demande et <strong>supprimé dès la fin</strong>, qu'il réussisse, échoue ou soit interrompu.</td></tr>
+  <tr><td>Stockage</td><td>Cloud Storage <code>gs://soccer-cv</code></td><td>Vidéos, résultats de chaque run (ils survivent aux redémarrages et forment l'historique), code versionné.</td></tr>
+  <tr><td>Images</td><td>Artifact Registry <code>soccer-cv/tier-a</code> (GPU, 6,5 Go), <code>tier-bc</code> (plateforme, 0,5 Go)</td><td>Construites par Cloud Build.</td></tr>
+</table>
+
+<p><strong>Code livré avec chaque job.</strong> À chaque lancement, le code courant est empaqueté (archive nommée par son empreinte) et déposé dans le bucket. La tâche GPU le télécharge et l'exécute à la place de celui de l'image.
+Une correction de code ne demande donc <em>jamais</em> de reconstruire l'image GPU de 6,5 Go. Il suffit de relancer.</p>
+
+<h4>Difficultés d'infrastructure rencontrées → réponses</h4>
+<div class="diff">
+  <div class="h">Difficulté</div><div class="h">Réponse</div>
+  <div>Cloud Batch : aucune L4 disponible dans la zone (<code>ZONE_RESOURCE_POOL_EXHAUSTED</code>), puis quota Batch plafonné à 2.</div>
+  <div>Deuxième moteur d'exécution, <strong>Cloud Run Jobs</strong>, où le projet dispose de 15 L4. Même interface que Batch : on choisit avec <code>--backend cloudrun</code> ou <code>--backend batch</code>.</div>
+  <div>Plantage natif au démarrage du GPU (« Segmentation fault », sans aucun message).</div>
+  <div>Job de diagnostic qui teste chaque maillon : pilote, CUDA, torch, OpenCV, décodage, détecteur. Plus <code>PYTHONFAULTHANDLER</code> pour obtenir la pile Python d'un plantage natif. Cause trouvée : la compilation TorchScript à l'import de RF-DETR avec torch 2.6. Contournée par <code>PYTORCH_JIT=0</code>, et le Dockerfile passe à un torch récent.</div>
+  <div>Autorisations manquantes, découvertes une à une (<code>run.developer</code>, lecture Artifact Registry).</div>
+  <div>Toutes ajoutées à <code>deploy/setup_gcp.sh</code>, pour qu'une installation neuve fonctionne du premier coup.</div>
+  <div>Une coupure réseau pendant le suivi d'un job a empêché son nettoyage automatique. Risque : un GPU loué et oublié.</div>
+  <div>Reprises automatiques sur le suivi, l'annulation et la suppression. Chaque job a une durée maximale stricte. La plateforme affiche en permanence le nombre de jobs GPU actifs.</div>
+  <div>Le projet GCP contient d'autres jobs Cloud Run, qui ne sont pas les nôtres.</div>
+  <div>Tous nos jobs sont préfixés <code>scv-</code> et étiquetés <code>app=soccer-cv</code>. Le code n'agit que sur ceux-là.</div>
+</div>
+
+<div class="callout"><strong>État au 23/09 :</strong> code poussé (<code>origin/main</code> = <code>a9e3ed8</code>), image de la plateforme <code>tier-bc:latest</code> construite ce matin.
+<strong>Il reste le déploiement du service</strong> : la commande <code>gcloud run deploy soccer-cv-demo …</code> de <code>docs/DEPLOY_NOW.md</code>, puis <code>gcloud run services proxy</code> pour ouvrir la plateforme.</div>
+
+<!-- ================================================================== -->
+<h2 id="transverse">Les grandes difficultés du sujet, et où elles sont traitées</h2>
+
+<table>
+  <tr><th>Difficulté</th><th>Pourquoi c'est dur</th><th>Ce qu'on fait</th><th>Étape</th></tr>
+  <tr><td><strong>Occlusions</strong></td><td>Un joueur caché est invisible : sa position mesurée est fausse ou absente.</td><td>Coût positionnel adouci selon le recouvrement, apparence pondérée par la visibilité, prédiction de Kalman pendant l'absence.</td><td><a href="#s4">4</a></td></tr>
+  <tr><td><strong>Échanges d'identité</strong></td><td>Au croisement, un choix se fait sur une image floue et à moitié cachée.</td><td>Garde-fou inter-équipes, puis revérification avant / après par apparence + physique, et abstention si c'est indécidable.</td><td><a href="#s4">4</a>, <a href="#s5">5</a></td></tr>
+  <tr><td><strong>Même maillot</strong></td><td>La couleur ne sépare pas deux coéquipiers.</td><td>Empreinte ReID apprise, moyennée sur des dizaines d'images nettes.</td><td><a href="#s5">5</a></td></tr>
+  <tr><td><strong>Sortie / retour dans le champ</strong></td><td>Aucune continuité visuelle ; le joueur revient ailleurs dans l'image.</td><td>Graphe de pistes sur le match entier, contrainte des 11 par équipe, abstention plutôt qu'erreur.</td><td><a href="#tb">B</a></td></tr>
+  <tr><td><strong>Mouvement de caméra</strong></td><td>Les vitesses en pixels mélangent le joueur et la caméra.</td><td>Les décisions ne reposent pas sur la vitesse en pixels. La calibration donne les positions en mètres.</td><td><a href="#s2">2</a>, <a href="#s5">5</a></td></tr>
+  <tr><td><strong>Personnes hors terrain</strong></td><td>Staff, coachs et photographes ressemblent à des joueurs pour le détecteur.</td><td>Filtre sur les pieds en mètres, avec reconstruction des pieds pour les boîtes coupées par le bord.</td><td><a href="#s4">4</a></td></tr>
+  <tr><td><strong>Changements de plan, ralentis</strong></td><td>La continuité est rompue.</td><td>Découpage en plans ; le suivi ne franchit jamais une coupure.</td><td><a href="#s0">0</a></td></tr>
+  <tr><td><strong>Ballon</strong></td><td>Minuscule, flou, souvent caché, parfois en l'air.</td><td>Machine à états avec test d'atteignabilité et états explicites.</td><td><a href="#s7">7</a></td></tr>
+  <tr><td><strong>Généralisation</strong></td><td>Chaque stade, diffuseur et maillot est différent.</td><td>Modèles génériques, groupements relatifs (pas de vocabulaire de maillot), terrain FIFA standard. Règle : ne jamais régler un seuil sur une seule vidéo.</td><td>partout</td></tr>
+  <tr><td><strong>Passage à l'échelle</strong></td><td>90 min × 25 images/s = 135 000 images.</td><td>Un plan = un calcul GPU indépendant, en parallèle. L'identité travaille sur des fiches, pas sur des pixels.</td><td>A / B</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="limites">Limites actuelles et suite</h2>
+
+<table>
+  <tr><th>Limite</th><th>Effet</th><th>Suite prévue</th></tr>
+  <tr><td>Calibration sur CPU : 8,9 fois la durée de la vidéo</td><td>Seul goulot de temps de la pipeline</td><td>Images clés plus espacées avec la passe à position fixe, parallélisation sur les 8 vCPU, grille vectorisée, puis modèle de points clés appris</td></tr>
+  <tr><td>Réglages validés sur un seul clip (Barça – Real)</td><td>Généralisation non démontrée</td><td>Tester de nouvelles vidéos depuis la plateforme et consigner chaque défaut dans <code>docs/IMPROVEMENTS.md</code></td></tr>
+  <tr><td>Détecteur générique non réentraîné, pas de détecteur de ballon spécialisé</td><td>Petits joueurs lointains et ballon perdus plus souvent</td><td>Découpage adaptatif (prêt), puis réentraînement ou détecteur de ballon temporel</td></tr>
+  <tr><td>Classification des plans heuristique</td><td>Un ralenti peut être traité comme un plan normal</td><td>Petit classifieur de type de plan</td></tr>
+  <tr><td>Démarrage à froid d'un job GPU : 80 à 270 s</td><td>Pèse sur les vidéos courtes</td><td>Image plus légère, ou regroupement des plans par job</td></tr>
+  <tr><td>Couche « masques » (SAM) et ballon 3D non branchées</td><td>Occlusions longues traitées par l'apparence seule</td><td>Palier qualité optionnel, déclenché seulement sur les fenêtres ambiguës</td></tr>
+</table>
+
+<p>Documents liés dans le dépôt : <code>docs/architecture_and_difficulties.md</code> (conception détaillée et références),
+<code>docs/reference_traceability.md</code> (quel article justifie quel choix), <code>docs/IMPROVEMENTS.md</code> (liste d'améliorations priorisée),
+<code>docs/DEPLOY_NOW.md</code> (mise en ligne).</p>
+
+<footer>soccer-cv · document généré à partir du code du dépôt au commit a9e3ed8 et des mesures du 22/09/2026 (clip de test 40 s, NVIDIA L4, Cloud Run europe-west1).</footer>
+</main>
+</body>
+</html>
