@@ -225,6 +225,9 @@ class TrackStage(Stage):
         # (height-prior estimate when the box is cut by the image border) are inside the touch /
         # goal lines + margin. Assistant referees and bench staff are therefore dropped too.
         margin_m = float(p.get("pitch_margin_m", 1.0))
+        max_calib_reject = float(p.get("calib_max_reject_frac", 0.5))
+        n_calib_distrusted = 0
+        distrusted: list[int] = []
         n_calib_frames = 0
 
         for i, frame in frames_iter(video, shot.start_frame, shot.end_frame):
@@ -236,6 +239,12 @@ class TrackStage(Stage):
                     # bottom edge), tested against the touch / goal lines + hard margin
                     xy, _ = feet_pitch_xy(calib[i], d[:, :4], frame.shape[1], frame.shape[0])
                     keep = on_pitch(xy, margin_m); n_calib_frames += 1
+                    # Plausibility guard: people standing on the grass are, overwhelmingly, on the
+                    # pitch. If the calibration throws most of them off it, the calibration is wrong
+                    # (degenerate fit), not the players -> fall back to the grass mask for this frame.
+                    grass_keep = feet_on_pitch(pitch_mask(frame), d[:, :4])
+                    if grass_keep.sum() >= 6 and (grass_keep & ~keep).sum() > max_calib_reject * grass_keep.sum():
+                        keep = grass_keep; n_calib_distrusted += 1; distrusted.append(int(i))
                 else:
                     keep = feet_on_pitch(pitch_mask(frame), d[:, :4])
                 n_off_pitch += int((~keep).sum()); d = d[keep]
@@ -280,13 +289,14 @@ class TrackStage(Stage):
         finished.extend(tracks)
 
         df = pd.DataFrame(rows, columns=TRACK_COLUMNS + ["team_online"])
+        Storage.write_json(ctx.out("calib_distrusted.json"), distrusted)     # frames where calibration contradicted the grass
         Storage.write_df(ctx.out("tracks.parquet"), df)
         app = pd.DataFrame([{"track_id": t.id, "embedding": t.emb.tolist(), "weight": float(t.emb_w),
                              "n_frames": len(t.history), "team_online": t.team} for t in finished if len(t.history)])
         Storage.write_df(ctx.out("track_app.parquet"), app)
         n_frames = shot.end_frame - shot.start_frame + 1
         return {"n_tracks": int(df.track_id.nunique()) if len(df) else 0,
-                "off_pitch_rejected": n_off_pitch, "team_model_fitted": team_model.ready,
+                "off_pitch_rejected": n_off_pitch, "calib_distrusted_frames": n_calib_distrusted, "team_model_fitted": team_model.ready,
                 "calibrated_frames": n_calib_frames,
                 "tracks_per_frame": round(len(df) / max(n_frames, 1), 2),
                 "low_margin_frac": round(n_switch_risk / max(len(df), 1), 3),

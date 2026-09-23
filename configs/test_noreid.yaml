@@ -6,6 +6,9 @@ ingest:
   hist_cut_threshold: 0.35
   min_shot_frames: 12
   classify_every_n: 5
+  normalize: true
+  max_height: 1080
+  target_fps: 25
 detect:
   model: rfdetr-medium
   resolution: 960

@@ -10,6 +10,9 @@ ingest:                   # stage 0
   hist_cut_threshold: 0.35        # HSV-histogram L1 distance that declares a cut
   min_shot_frames: 12
   classify_every_n: 5
+  normalize: true          # re-encode to the working profile when needed (height <= max_height, constant fps)
+  max_height: 1080
+  target_fps: 25
 
 detect:                   # stage 3
   model: rfdetr-medium    # rfdetr-nano | rfdetr-small | rfdetr-medium | rfdetr-large

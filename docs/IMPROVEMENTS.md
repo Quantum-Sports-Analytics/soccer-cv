@@ -94,3 +94,19 @@ ajustés en regardant ce clip et doivent être confrontés à d'autres condition
   Artifact Registry, ou un job par match plutôt que par vidéo courte.
 - **P2 — Image GPU avec torch 2.6 (index cu124)** ; import de rfdetr plante sans `PYTORCH_JIT=0`.
   Dockerfile passé à cu128 ; à reconstruire et revalider.
+
+
+## Première vidéo hors clip de référence (23/09) : PSG – Arsenal, capture d'écran 3024×1716, ~59,7 fps variable
+
+- **Fait — normalisation à l'ingestion** (`s0_ingest.normalize_video`) : hauteur ≤ 1080, 25 fps constants, passe-plat si déjà conforme.
+  Tous les seuils en pixels et en images supposent ce profil.
+- **Fait — garde-fou de plausibilité de la calibration** (`s4_track`, `calib_max_reject_frac` = 0,5) : si la calibration envoie hors
+  terrain plus de la moitié des personnes debout sur la pelouse, elle est jugée fausse pour cette image (repli sur le masque de pelouse,
+  pas de position 2D). Sur la vidéo : joueurs de nouveau suivis dès 0 s (483 suivis la 1re seconde contre 15).
+- **P0 — La calibration classique échoue sur un plan serré de surface vu en biais.** Solution dégénérée (une seule ligne, la touche
+  proche, parfaitement calée, 47 % des lignes détectées expliquées) acceptée comme valide ; aucune des 36 positions caméra testées ne fait
+  mieux : c'est la fonction de coût (lignes détectées partiellement) qui préfère la solution dégénérée, pas la recherche.
+  *Proposé* : modèle appris de points clés + lignes du terrain (PnLCalib, GPL-2.0, poids publiés), la calibration classique restant en repli
+  et la passe 3 (mouvement caméra) en lissage. *Terminé quand* : la vidéo PSG – Arsenal est calibrée sur toute sa durée, sans dégrader le clip Barça.
+- **P2 — Paramètres exprimés en images** (durée de vie des pistes, fenêtres, porte ballon) : les passer en secondes pour garder les 50 fps
+  des broadcasts au lieu de sous-échantillonner à 25.

@@ -36,13 +36,16 @@ CLIP_BOX = (-L / 2 - 10, L / 2 + 10, -W / 2 - 8, W / 2 + 8)
 def _calib_params(run_uri: str) -> dict[int, np.ndarray]:
     """frame -> camera params, merged over shots (frame indices are global)."""
     out: dict[int, np.ndarray] = {}
+    bad: set[int] = set()
     for u in Storage.list(Storage.join(run_uri, "tier_a")):
         if u.endswith("s2_calib/calib.parquet"):
             df = Storage.read_df(u)
             df = df[df.valid]
             cols = ["cx", "cy", "cz", "pan", "tilt", "f"]
             out.update({int(f): v for f, v in zip(df.frame, df[cols].to_numpy(dtype=float))})
-    return out
+        elif u.endswith("s4_track/calib_distrusted.json"):
+            bad.update(int(f) for f in Storage.read_json(u))
+    return {f: v for f, v in out.items() if f not in bad}        # frames the tracker found implausible: no positions
 
 
 def _clip_polygon(poly: np.ndarray, box=CLIP_BOX) -> np.ndarray:

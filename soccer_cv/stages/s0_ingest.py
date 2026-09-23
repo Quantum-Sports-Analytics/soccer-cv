@@ -45,13 +45,57 @@ def classify_shot(green_frac: float, person_scale_hint: float | None = None) -> 
     return ShotType.OTHER
 
 
+def _probe(path: str) -> dict:
+    """Container-level stream properties (ffprobe): size, nominal and average frame rate."""
+    import json as _json, subprocess
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "stream=width,height,r_frame_rate,avg_frame_rate", "-of", "json", path],
+                         capture_output=True, text=True, check=True).stdout
+    st = _json.loads(out)["streams"][0]
+    rate = lambda s: (lambda a, b: float(a) / float(b) if float(b) else 0.0)(*s.split("/"))   # noqa: E731
+    return {"width": int(st["width"]), "height": int(st["height"]),
+            "fps_nominal": rate(st["r_frame_rate"]), "fps_avg": rate(st["avg_frame_rate"])}
+
+
+def normalize_video(src: str, dst: str, max_height: int = 1080, fps: float = 25.0) -> dict:
+    """Bring any input to the working profile the pipeline is tuned for: height <= max_height,
+    constant `fps`. Every pixel threshold (line-mask kernels, tolerances, box margins) and every
+    per-frame quantity (track ages, ball speed gate, windows) is expressed for that profile.
+
+    Pass-through (no re-encode) when the input already conforms. Measured failure without it:
+    a 3024x1716, variable ~59.7 fps screen recording -> degenerate calibration on 5 s of 8.6,
+    every player filtered as off-pitch.
+    """
+    import subprocess
+    pr = _probe(src)
+    vfr = pr["fps_nominal"] > 0 and abs(pr["fps_nominal"] - pr["fps_avg"]) / pr["fps_nominal"] > 0.002
+    need = pr["height"] > max_height or abs(pr["fps_avg"] - fps) > 0.05 or vfr
+    info = {"source": {**pr, "vfr": bool(vfr)}, "normalized": bool(need)}
+    if not need:
+        return info
+    vf = f"scale=-2:'min({max_height},ih)':flags=area,fps={fps:g}"
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-vf", vf, "-an", "-c:v", "libx264",
+           "-preset", "veryfast", "-crf", "17", "-pix_fmt", "yuv420p", dst]
+    subprocess.run(cmd, check=True)
+    log.info("ingest: normalized %dx%d @ %.2f fps%s -> %s", pr["width"], pr["height"], pr["fps_avg"],
+             " (variable)" if vfr else "", vf)
+    return info
+
+
 class IngestStage(Stage):
     name = "s0_ingest"
     config_key = "ingest"
 
     def run(self, ctx: StageContext) -> dict:
         src = Storage.localize(ctx.input_uri, ctx.workdir)
+        norm = {"normalized": False}
+        if bool(self.params.get("normalize", True)):
+            dst = str(Path(ctx.workdir) / "normalized.mp4")
+            norm = normalize_video(src, dst, int(self.params.get("max_height", 1080)), float(self.params.get("target_fps", 25.0)))
+            if norm["normalized"]:
+                src = dst
         meta = video_meta(src)
+        meta.update(norm)
         thr = float(self.params.get("hist_cut_threshold", 0.35))
         min_len = int(self.params.get("min_shot_frames", 12))
 
@@ -91,7 +135,7 @@ class IngestStage(Stage):
         if Storage.join(ctx.output_uri, "video.mp4") != str(src):
             Storage.upload_file(src, ctx.out("video.mp4"))
         log.info("ingest: %d frames, %d shots, %d cuts", n, len(shots), len(cuts))
-        return {"n_frames": n, "n_shots": len(shots), "n_cuts": len(cuts),
+        return {"n_frames": n, "n_shots": len(shots), "n_cuts": len(cuts), "normalized": bool(norm["normalized"]),
                 "main_shots": sum(s.shot_type == ShotType.MAIN for s in shots)}
 
 
