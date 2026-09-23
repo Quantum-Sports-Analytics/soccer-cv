@@ -24,6 +24,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.templating import Jinja2Templates
 
 from ..core import Storage
@@ -46,6 +47,7 @@ MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "2000"))
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "scv_uploads"
 
 app = FastAPI(title="soccer-cv demo")
+app.add_middleware(GZipMiddleware, minimum_size=2048)      # pitch2d.json compresses ~6x
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 _lock = threading.Lock()
 
@@ -248,6 +250,20 @@ def run_windows(run_id: str):
                 out.append({"t0": round(w["f0"] / fps, 2), "t1": round(w["f1"] / fps, 2), "tracks": [w["a"], w["b"]],
                             "decision": w.get("decision"), "margin": w.get("margin")})
     return sorted(out, key=lambda w: w["t0"])
+
+
+@app.get("/api/runs/{run_id}/pitch2d")
+def run_pitch2d(run_id: str):
+    """2D pitch view data (players, ball, camera footprint in metres). Built lazily for runs
+    produced before the 2D view existed, then cached next to the overlay."""
+    job = _job(run_id)
+    uri = Storage.join(job["run_uri"], "tier_c", "pitch2d.json")
+    if not Storage.exists(uri):
+        if not Storage.exists(Storage.join(job["run_uri"], "tier_c", "fused.parquet")):
+            raise HTTPException(404, "run has no Tier C output yet")
+        from ..tiers.pitch2d import write_pitch2d
+        write_pitch2d(job["run_uri"])
+    return Response(Storage.read_bytes(uri), media_type="application/json")
 
 
 @app.get("/api/runs/{run_id}/video/{which}")

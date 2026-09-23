@@ -21,6 +21,8 @@ calib:
   anchor_candidates: 3
   topk: 60
   refit_every_keyframes: 10
+  motion_interp: true
+  motion_tol_deg: 1.0
 track:
   max_age: 30
   min_hits: 3

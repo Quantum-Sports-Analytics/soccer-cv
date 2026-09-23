@@ -35,7 +35,15 @@
   button { background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:7px; padding:5px 11px; cursor:pointer; font:inherit }
   button:hover { border-color:var(--acc) } button.on { background:var(--acc); border-color:var(--acc) }
   button.danger:hover { border-color:var(--bad) }
-  .grid { display:grid; grid-template-columns: minmax(0, 1fr) 330px; gap:18px; margin-top:14px }
+  .col { max-width: 1180px; margin-top:14px }
+  .pitchcard { margin-top:14px }
+  .pitchcard label { font-size:12px; color:var(--muted); cursor:pointer; user-select:none }
+  #pitch { width:100%; display:block; border-radius:6px; background:#1f5a32 }
+  details.fold > summary { cursor:pointer; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); list-style:none }
+  details.fold > summary::before { content:'▸ '; } details.fold[open] > summary::before { content:'▾ '; }
+  details.fold[open] > summary { margin-bottom:10px }
+  .foldgrid { display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap:24px }
+  @media (max-width: 900px) { .foldgrid { grid-template-columns: 1fr } }
   video { width:100%; background:#000; border-radius:8px; display:block }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:14px }
   .kv { display:grid; grid-template-columns: 1fr auto; gap:3px 12px; font-size:13px }
@@ -149,18 +157,28 @@ async function refresh(first=false) {
       </div>
       ${live ? stepsHTML(j.status) + `<div class="status" style="margin-top:8px;font-size:12px">${j.batch_event || ''}</div>` : ''}
       ${j.status === 'failed' ? `<div class="card" style="margin-top:14px"><b class="poor">Échec</b> ${j.error || ''}<pre>${(j.log_tail || []).join('\n')}</pre></div>` : ''}
-      <div class="grid">
-        <div>
-          ${done ? `<video id="vid" controls preload="metadata" src="/api/runs/${j.id}/video/${which}"></video>
-            <div class="legend" style="margin-top:8px">
-              Couleur = équipe (clustering relatif) · vert = officiels · <b>?</b> = identité non attribuée (abstention plutôt qu'erreur) ·
-              cadre blanc = retour d'un joueur après sortie · point = assignation ambiguë · grille jaune = terrain calibré ·
-              panneau de droite = état du roster.</div>
-            <h2>Situations ambiguës (croisements) — cliquer pour y aller</h2><div id="win" class="card">…</div>`
-            : `<div class="card empty">${live ? 'Le calcul tourne sur GPU. La page se met à jour seule ; tu peux la fermer et revenir.' : 'Pas de sortie.'}</div>`}
-        </div>
-        <div>
-          <div class="card"><h2 style="margin-top:0">Qualité de ce run</h2>
+      <div class="col">
+        ${done ? `<video id="vid" controls preload="metadata" src="/api/runs/${j.id}/video/${which}"></video>
+          <div class="legend" style="margin-top:8px">
+            Couleur = équipe (regroupement relatif) · vert = arbitre · <b>?</b> = identité non attribuée (abstention plutôt qu'erreur) ·
+            cadre blanc = retour d'un joueur après sortie · point = assignation ambiguë · grille jaune = terrain calibré ·
+            panneau de droite = état de l'effectif.</div>
+          <div class="card pitchcard">
+            <div class="top" style="margin-bottom:8px">
+              <h2 style="margin:0">Vue 2D du terrain — synchronisée avec la vidéo</h2>
+              <span style="flex:1"></span>
+              <label><input type="checkbox" id="optView" checked> champ caméra</label>
+              <label><input type="checkbox" id="optTrail" checked> traînées (2 s)</label>
+              <label><input type="checkbox" id="optIds" checked> numéros</label>
+            </div>
+            <canvas id="pitch"></canvas>
+            <div class="legend" id="pitchInfo" style="margin-top:6px">chargement…</div>
+          </div>`
+          : `<div class="card empty">${live ? 'Le calcul tourne sur GPU. La page se met à jour seule ; tu peux la fermer et revenir.' : 'Pas de sortie.'}</div>`}
+
+        <details class="card fold">
+          <summary>Qualité de ce run</summary>
+          <div class="foldgrid">
             <div class="kv">
               <span class="k">images · plans</span><span class="v">${fmt(rp.frames)} · ${fmt(rp.shots)}</span>
               <span class="k">personnes détectées / image</span><span class="v">${fmt(rp.persons_per_frame,1)}</span>
@@ -177,15 +195,22 @@ async function refresh(first=false) {
               <span class="k">ballon vu</span><span class="v ${cls(rp.ball_visible_frac,.9,.7)}">${pct(rp.ball_visible_frac)}</span>
               <span class="k">ballon localisé (vu + interpolé)</span><span class="v ${cls(rp.ball_located_frac,.95,.8)}">${pct(rp.ball_located_frac)}</span>
               <span class="k">temps de calcul (somme des étapes)</span><span class="v">${fmt(rp.compute_seconds,0)} s</span>
-            </div></div>
-          <div class="card"><h2 style="margin-top:0">Étapes</h2>
-            <table><tr><th>étape</th><th style="text-align:right">s</th></tr>
-            ${(j.stages||[]).map(s => `<tr title='${JSON.stringify(s.metrics).replace(/'/g,"")}'><td><code>${s.stage}</code></td><td style="text-align:right">${fmt(s.seconds,1)}</td></tr>`).join('') || '<tr><td colspan=2 class="status">en attente</td></tr>'}
-            </table></div>
-          <div class="legend">run <code>${j.id}</code> · config <code>${j.config || ''}</code>${j.code_uri ? ' · code <code>' + j.code_uri.split('/').pop() + '</code>' : ''}</div>
-        </div>
+            </div>
+            <div>
+              <table><tr><th>étape</th><th style="text-align:right">s</th></tr>
+              ${(j.stages||[]).map(s => `<tr title='${JSON.stringify(s.metrics).replace(/'/g,"")}'><td><code>${s.stage}</code></td><td style="text-align:right">${fmt(s.seconds,1)}</td></tr>`).join('') || '<tr><td colspan=2 class="status">en attente</td></tr>'}
+              </table>
+              <div class="legend" style="margin-top:8px">run <code>${j.id}</code> · config <code>${j.config || ''}</code>${j.code_uri ? ' · code <code>' + j.code_uri.split('/').pop() + '</code>' : ''}</div>
+            </div>
+          </div>
+        </details>
+        ${done ? `<details class="card fold">
+          <summary>Situations ambiguës (croisements) <span class="status" id="winCount"></span></summary>
+          <div class="legend" style="margin:6px 0">Cliquer sur une ligne pour aller à ce moment de la vidéo.</div>
+          <div id="win">…</div>
+        </details>` : ''}
       </div>`;
-    if (done) loadWindows(j.id);
+    if (done) { loadWindows(j.id); loadPitch(j.id); }
   }
   if (live) pollT = setTimeout(() => refresh(), 5000);
   else loadRuns();
@@ -194,11 +219,123 @@ async function refresh(first=false) {
 async function loadWindows(id) {
   const w = await (await fetch(`/api/runs/${id}/windows`)).json();
   const box = $('#win'); if (!box) return;
+  const wc = $('#winCount'); if (wc) wc.textContent = '· ' + w.length;
   const DEC = {keep:'pas d\'échange', swap:'échange corrigé', split:'coupé → Tier B', undecidable:'indécidable'};
   box.innerHTML = w.length ? `<table><tr><th>début</th><th>fin</th><th>pistes</th><th>décision</th><th style="text-align:right">marge</th></tr>
     ${w.map(x => `<tr class="click" onclick="seek(${x.t0})"><td>${x.t0.toFixed(1)} s</td><td>${x.t1.toFixed(1)} s</td><td>${x.tracks.join(' / ')}</td>
       <td class="${x.decision==='keep'?'':x.decision==='swap'?'good':'mid'}">${DEC[x.decision] || x.decision}</td><td style="text-align:right">${fmt(x.margin,2)}</td></tr>`).join('')}</table>`
     : '<span class="status">aucun croisement ambigu détecté</span>';
+}
+
+
+// ---------------- 2D pitch view (metres; far touchline at the top, like the TV image)
+const TEAM_RGB = {0: '#e74c3c', 1: '#3cc8ff', 2: '#5adc5a', '-1': '#a0a0a0'};
+const BALL_STATE = ['vu', 'caché (interpolé)', 'en l\'air', 'tenu', 'inconnu'];
+let P2 = null, p2run = null, p2raf = null;
+
+async function loadPitch(id) {
+  p2run = id; P2 = null;
+  const info = $('#pitchInfo');
+  try {
+    const r = await fetch(`/api/runs/${id}/pitch2d`);
+    if (!r.ok) { if (info) info.textContent = 'vue 2D indisponible pour ce run (' + r.status + ')'; return; }
+    const d = await r.json(); if (p2run !== id) return;
+    P2 = d;
+  } catch (e) { if (info) info.textContent = 'vue 2D indisponible : ' + e; return; }
+  const v = $('#vid'), cv = $('#pitch'); if (!v || !cv) return;
+  const draw = () => drawPitch(v.currentTime);
+  ['seeked', 'loadedmetadata', 'pause', 'timeupdate'].forEach(ev => v.addEventListener(ev, draw));
+  ['optView', 'optTrail', 'optIds'].forEach(k => $('#' + k).addEventListener('change', draw));
+  window.addEventListener('resize', draw);
+  cv.addEventListener('click', e => {                       // click on the minimap: nothing to seek, but toggles play
+    if (v.paused) v.play(); else v.pause(); });
+  const loop = () => { if (p2run !== id) return; if (!v.paused) draw();
+    p2raf = v.requestVideoFrameCallback ? v.requestVideoFrameCallback(loop) : requestAnimationFrame(loop); };
+  loop(); draw();
+}
+
+function drawPitch(t) {
+  const cv = $('#pitch'); if (!cv || !P2) return;
+  const [L, W] = P2.pitch, M = 6;                           // 6 m margin around the pitch
+  const cssW = cv.clientWidth, cssH = cssW * (W + 2 * M) / (L + 2 * M), dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(cssW * dpr)) { cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr); cv.style.height = cssH + 'px'; }
+  const g = cv.getContext('2d'), k = cv.width / (L + 2 * M);
+  const X = x => (x + L / 2 + M) * k, Y = y => (W / 2 - y + M) * k;       // y > 0 = far side = top
+  const fr = Math.max(0, Math.min(P2.n_frames - 1, Math.floor(t * P2.fps + 1e-3)));
+
+  // pitch: stripes + markings
+  g.fillStyle = '#1f5a32'; g.fillRect(0, 0, cv.width, cv.height);
+  for (let i = 0; i < 14; i++) if (i % 2) { g.fillStyle = '#226137'; g.fillRect(X(-L / 2 + i * L / 14), Y(W / 2), L / 14 * k, W * k); }
+  g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = Math.max(1, 0.12 * k);
+  const rect = (x0, y0, x1, y1) => g.strokeRect(X(x0), Y(y1), (x1 - x0) * k, (y1 - y0) * k);
+  rect(-L / 2, -W / 2, L / 2, W / 2);
+  g.beginPath(); g.moveTo(X(0), Y(W / 2)); g.lineTo(X(0), Y(-W / 2)); g.stroke();
+  g.beginPath(); g.arc(X(0), Y(0), 9.15 * k, 0, 2 * Math.PI); g.stroke();
+  for (const s of [-1, 1]) {
+    const gx = s * L / 2;
+    rect(Math.min(gx, gx - s * 16.5), -20.16, Math.max(gx, gx - s * 16.5), 20.16);
+    rect(Math.min(gx, gx - s * 5.5), -9.16, Math.max(gx, gx - s * 5.5), 9.16);
+    rect(Math.min(gx, gx + s * 1.5), -3.66, Math.max(gx, gx + s * 1.5), 3.66);          // goal
+    g.beginPath(); g.arc(X(gx - s * 11), Y(0), 0.25 * k, 0, 2 * Math.PI); g.fillStyle = '#fff'; g.fill();
+    const a0 = Math.acos(5.5 / 9.15);                                                    // penalty arc outside the box
+    g.beginPath();
+    if (s < 0) g.arc(X(gx + 11), Y(0), 9.15 * k, -a0, a0); else g.arc(X(gx - 11), Y(0), 9.15 * k, Math.PI - a0, Math.PI + a0);
+    g.stroke();
+  }
+  g.beginPath(); g.arc(X(0), Y(0), 0.25 * k, 0, 2 * Math.PI); g.fillStyle = '#fff'; g.fill();
+
+  // camera footprint
+  if ($('#optView').checked) {
+    const poly = P2.view[Math.floor(fr / P2.view_step)];
+    if (poly && poly.length > 2) {
+      g.beginPath(); poly.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))); g.closePath();
+      g.fillStyle = 'rgba(255,255,255,.07)'; g.fill(); g.setLineDash([6, 5]); g.strokeStyle = 'rgba(255,255,255,.45)'; g.lineWidth = 1.2 * (window.devicePixelRatio || 1); g.stroke(); g.setLineDash([]);
+    }
+  }
+
+  // trails (last 2 s, per identity)
+  if ($('#optTrail').checked) {
+    const n = Math.round(2 * P2.fps), paths = {};
+    for (let f = Math.max(0, fr - n); f <= fr; f++)
+      for (const [id, team, x, y] of P2.players[f]) if (id >= 0) (paths[id] = paths[id] || {team, pts: []}).pts.push([x, y]);
+    g.lineWidth = Math.max(1, 0.18 * k);
+    for (const id in paths) { const {team, pts} = paths[id]; if (pts.length < 2) continue;
+      g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)));
+      g.strokeStyle = TEAM_RGB[team] + '66'; g.stroke(); }
+    const bt = [];                                                                        // ball trail, 1 s
+    for (let f = Math.max(0, fr - Math.round(P2.fps)); f <= fr; f++) if (P2.ball[f]) bt.push(P2.ball[f]);
+    if (bt.length > 1) { g.beginPath(); bt.forEach(([x, y], i) => i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y)));
+      g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = Math.max(1, 0.15 * k); g.stroke(); }
+  }
+
+  // players / referee
+  const R = Math.max(5, 1.1 * k), showIds = $('#optIds').checked;
+  const cur = P2.players[fr] || [];
+  for (const [id, team, x, y, conf] of cur) {
+    const col = id < 0 ? TEAM_RGB['-1'] : TEAM_RGB[team] || TEAM_RGB['-1'];
+    g.globalAlpha = id < 0 ? 0.75 : 0.45 + 0.55 * Math.min(1, Math.max(0, conf));
+    g.beginPath(); g.arc(X(x), Y(y), R, 0, 2 * Math.PI); g.fillStyle = col; g.fill();
+    g.lineWidth = Math.max(1, 0.12 * k); g.strokeStyle = '#0b0d11'; g.stroke(); g.globalAlpha = 1;
+    if (showIds) { g.fillStyle = team === 1 ? '#0b0d11' : '#fff'; g.font = `600 ${Math.round(R * 1.05)}px -apple-system, Segoe UI, sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(id < 0 ? '?' : (team === 2 ? 'A' : String(id)), X(x), Y(y) + 0.5); }
+  }
+
+  // ball
+  const b = P2.ball[fr];
+  if (b) { const [x, y, st] = b, rb = Math.max(3.5, 0.6 * k);
+    g.beginPath(); g.arc(X(x), Y(y), rb, 0, 2 * Math.PI);
+    if (st === 2) { g.setLineDash([3, 2]); g.strokeStyle = '#ffe14d'; g.lineWidth = 2; g.stroke(); g.setLineDash([]); }
+    else { g.fillStyle = st === 1 ? 'rgba(255,255,255,.55)' : '#fff'; g.fill(); g.strokeStyle = '#000'; g.lineWidth = 1.5; g.stroke(); } }
+
+  // info line
+  const nT = [0, 1, 2].map(tm => cur.filter(q => q[1] === tm && q[0] >= 0).length), nU = cur.filter(q => q[0] < 0).length;
+  const info = $('#pitchInfo');
+  if (info) info.innerHTML = `image ${fr} · ${(fr / P2.fps).toFixed(1)} s · ` +
+    `<span style="color:${TEAM_RGB[0]}">●</span> ${nT[0]} &nbsp;<span style="color:${TEAM_RGB[1]}">●</span> ${nT[1]} &nbsp;<span style="color:${TEAM_RGB[2]}">●</span> arbitre ${nT[2]}` +
+    (nU ? ` &nbsp;<span style="color:${TEAM_RGB['-1']}">●</span> non attribués ${nU}` : '') +
+    ` · ballon : ${b ? BALL_STATE[b[2]] : 'non localisé'}` +
+    `<br>Seuls les joueurs dans le champ de la caméra (zone en pointillés) sont placés : ceux hors champ ne sont pas estimés. ` +
+    `Ballon projeté au sol : exact au sol, décalé quand il est en l'air (cercle jaune pointillé).`;
 }
 
 function seek(t) { const v = $('#vid'); if (v) { v.currentTime = Math.max(0, t - 1.0); v.play() } }

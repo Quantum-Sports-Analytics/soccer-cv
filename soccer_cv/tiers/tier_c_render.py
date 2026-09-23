@@ -85,9 +85,16 @@ class FuseStage(Stage):
                                  float(min(r.confidence, row.swap_conf)) if not r.abstained else 0.0, float(err[k]),
                                  1 if (is_reentry and k == 0) else 0))
         fused_df = pd.DataFrame(out_rows, columns=FUSED_COLUMNS)
+        # pitch positions (metres) of every row, from the per-shot calibration
+        from .pitch2d import _calib_params, pitch_positions, write_pitch2d
+        meta_uri = Storage.join(root, "ingest", "meta.json")
+        meta = Storage.read_json(meta_uri) if Storage.exists(meta_uri) else {}
+        xy = pitch_positions(fused_df, _calib_params(root), int(meta.get("width", 1920)), int(meta.get("height", 1080)))
+        fused_df["px"], fused_df["py"] = xy[:, 0], xy[:, 1]
         Storage.write_df(ctx.out("fused.parquet"), fused_df)
         Storage.write_df(ctx.out("ball.parquet"), ball)
-        return {"n_rows": len(fused_df), "n_identities": int((fused_df.identity_id > 0).sum() and fused_df[fused_df.identity_id > 0].identity_id.nunique()),
+        p2d = write_pitch2d(root) if Storage.exists(meta_uri) else {}
+        return {**p2d, "n_rows": len(fused_df), "n_identities": int((fused_df.identity_id > 0).sum() and fused_df[fused_df.identity_id > 0].identity_id.nunique()),
                 "abstained_rows": int((fused_df.identity_id == -1).sum()),
                 "reentries": int(fused_df.reentry.sum())}
 

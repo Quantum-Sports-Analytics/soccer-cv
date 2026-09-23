@@ -381,6 +381,148 @@ def image_to_pitch(H: np.ndarray, uv: np.ndarray) -> np.ndarray:
     return p[:, :2] / p[:, 2:3]
 
 
+# ---------------------------------------------------------------- inter-keyframe camera motion
+# Keyframes are fitted on the pitch lines once per `every_n_frames`. In between, a linear
+# interpolation of pan / tilt / zoom is wrong as soon as the operator pans non-uniformly
+# (measured: players "running" at 7-11 m/s during a whip pan). A fixed-position broadcast
+# camera only rotates and zooms, so consecutive images are related by K2 R2 R1^T K1^-1:
+# we estimate that from background feature matches (players masked out), chain it forward
+# from keyframe a and backward from keyframe b, and blend the two chains so the result is
+# exact at both keyframes (no drift) and follows the true motion in between.
+
+def _rot(pan: float, tilt: float) -> np.ndarray:
+    t, ph = np.deg2rad(tilt), np.deg2rad(pan)
+    base = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+    Rx = np.array([[1, 0, 0], [0, np.cos(t), -np.sin(t)], [0, np.sin(t), np.cos(t)]])
+    Rz = np.array([[np.cos(ph), -np.sin(ph), 0], [np.sin(ph), np.cos(ph), 0], [0, 0, 1]])
+    return Rx @ base @ Rz
+
+
+def _K(f: float, img_w: int, img_h: int) -> np.ndarray:
+    return np.array([[f, 0, img_w / 2], [0, f, img_h / 2], [0, 0, 1.0]])
+
+
+def motion_pairs(video: str, start: int, end: int, dets: dict | None, scale: float = 0.5,
+                 n_feat: int = 1500, min_inliers: int = 25) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """t -> (points in frame t, matching points in frame t+1), full-resolution pixels, RANSAC inliers.
+    Players are masked out (they move independently of the camera)."""
+    orb = cv2.ORB_create(n_feat, fastThreshold=10)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    out, prev = {}, None
+    for i, frame in frames_iter(video, start, end):
+        g = cv2.cvtColor(cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+        mask = np.full(g.shape, 255, np.uint8)
+        for x1, y1, x2, y2 in (dets.get(i, []) if dets else []):
+            pad = 0.15 * (y2 - y1)
+            cv2.rectangle(mask, (int((x1 - pad) * scale), int((y1 - pad) * scale)), (int((x2 + pad) * scale), int((y2 + pad) * scale)), 0, -1)
+        kp, des = orb.detectAndCompute(g, mask)
+        if prev is not None and des is not None and prev[1] is not None and len(kp) >= min_inliers and len(prev[0]) >= min_inliers:
+            m = [a for a, b in (x for x in bf.knnMatch(prev[1], des, k=2) if len(x) == 2) if a.distance < 0.8 * b.distance]
+            if len(m) >= min_inliers:
+                pa = np.float32([prev[0][x.queryIdx].pt for x in m]); pb = np.float32([kp[x.trainIdx].pt for x in m])
+                # TV graphics (score bug, channel logo, clock) are glued to the screen and match with
+                # zero displacement; when a coherent moving set exists they are the outliers, not the
+                # camera. Measured on clip1: 53 % of matches static -> pan under-estimated by ~50 %.
+                moving = np.linalg.norm(pb - pa, axis=1) > 0.25
+                if moving.sum() >= 2 * min_inliers:
+                    pa, pb = pa[moving], pb[moving]
+                _, inl = cv2.findHomography(pa, pb, cv2.RANSAC, 1.5)
+                if inl is not None and inl.sum() >= min_inliers:
+                    k = inl.ravel().astype(bool)
+                    out[i - 1] = (pa[k] / scale, pb[k] / scale)
+        prev = (kp, des)
+    return out
+
+
+def ptz_step(ptz: np.ndarray, pa: np.ndarray, pb: np.ndarray, img_w: int, img_h: int) -> np.ndarray:
+    """(pan, tilt, f) of the next image given this image's (pan, tilt, f) and point matches."""
+    from scipy.optimize import least_squares
+    rays = _rot(ptz[0], ptz[1]).T @ np.linalg.inv(_K(ptz[2], img_w, img_h)) @ np.c_[pa, np.ones(len(pa))].T
+
+    def res(x):
+        q = _K(x[2], img_w, img_h) @ _rot(x[0], x[1]) @ rays
+        return ((q[:2] / q[2]).T - pb).ravel()
+    r = least_squares(res, ptz, x_scale=[0.1, 0.1, 50.0], loss="soft_l1", f_scale=2.0, max_nfev=50)
+    return r.x
+
+
+def chain_ptz(x0: np.ndarray, a: int, b: int, pairs: dict, img_w: int, img_h: int) -> np.ndarray:
+    """Camera (pan, tilt, f) at frame b, chained from frame a through the image motion (either direction)."""
+    x = np.array(x0, float)
+    if b >= a:
+        for t in range(a, b):
+            if t in pairs:
+                x = ptz_step(x, pairs[t][0], pairs[t][1], img_w, img_h)
+    else:
+        for t in range(a - 1, b - 1, -1):
+            if t in pairs:
+                x = ptz_step(x, pairs[t][1], pairs[t][0], img_w, img_h)
+    return x
+
+
+def motion_outliers(frames: list[int], ptz: list[np.ndarray], pairs: dict, img_w: int, img_h: int,
+                    tol_deg: float = 1.0) -> dict[int, np.ndarray]:
+    """Keyframes contradicted by the camera motion from BOTH neighbours (pan or tilt off by more
+    than `tol_deg`). Returns frame -> motion-predicted (pan, tilt, f) (mean of the two chains).
+    Measured on clip1: two keyframes with +2 / -3 deg tilt jumps that the image motion does not
+    show (a tilt / focal ambiguity when little of the pitch markings is visible)."""
+    out = {}
+    for j in range(1, len(frames) - 1):
+        fwd = chain_ptz(ptz[j - 1], frames[j - 1], frames[j], pairs, img_w, img_h)
+        bwd = chain_ptz(ptz[j + 1], frames[j + 1], frames[j], pairs, img_w, img_h)
+        bad = lambda pr: max(abs(pr[0] - ptz[j][0]), abs(pr[1] - ptz[j][1])) > tol_deg      # noqa: E731
+        if bad(fwd) and bad(bwd) and max(abs(fwd[0] - bwd[0]), abs(fwd[1] - bwd[1])) <= tol_deg:
+            pred = (fwd + bwd) / 2
+            pred[2] = np.sqrt(fwd[2] * bwd[2])
+            out[frames[j]] = pred
+    return out
+
+
+def motion_interpolate(kf: pd.DataFrame, pairs: dict, frames: np.ndarray, img_w: int, img_h: int) -> tuple[pd.DataFrame, dict]:
+    """Per-frame camera params: keyframe values at valid keyframes, motion-chained in between
+    (forward from a, backward from b, blended linearly in time; log-space for the focal)."""
+    kf = kf.sort_values("frame")
+    kfr = kf.frame.to_numpy()
+    ptz_k = kf[["pan", "tilt", "f"]].to_numpy(dtype=float)
+    pos_k = kf[["cx", "cy", "cz"]].to_numpy(dtype=float)
+    f0, f1 = int(frames[0]), int(frames[-1])
+    ptz = {int(a): ptz_k[j] for j, a in enumerate(kfr)}
+    closure = []
+
+    def chain(a, b, x0, fwd=True):
+        out, x = {a: x0}, x0
+        rng = range(a, b) if fwd else range(a, b, -1)
+        for t in rng:
+            nxt = t + 1 if fwd else t - 1
+            pr = pairs.get(t if fwd else nxt)
+            if pr is not None:
+                x = ptz_step(x, pr[0], pr[1], img_w, img_h) if fwd else ptz_step(x, pr[1], pr[0], img_w, img_h)
+            out[nxt] = x
+        return out
+    for j in range(len(kfr) - 1):
+        a, b = int(kfr[j]), int(kfr[j + 1])
+        fw, bw = chain(a, b, ptz_k[j], True), chain(b, a, ptz_k[j + 1], False)
+        closure.append(abs(fw[b][0] - ptz_k[j + 1][0]) + abs(fw[b][1] - ptz_k[j + 1][1]))
+        for t in range(a + 1, b):
+            w = (t - a) / (b - a)
+            x = (1 - w) * fw[t] + w * bw[t]
+            x[2] = np.exp((1 - w) * np.log(fw[t][2]) + w * np.log(bw[t][2]))
+            ptz[t] = x
+    if len(kfr):                                   # before the first / after the last valid keyframe: one-sided chains
+        ptz.update({k: v for k, v in chain(int(kfr[0]), f0, ptz_k[0], False).items() if k < kfr[0]})
+        ptz.update({k: v for k, v in chain(int(kfr[-1]), f1, ptz_k[-1], True).items() if k > kfr[-1]})
+    rows = []
+    for t in frames:
+        x = ptz.get(int(t))
+        pos = pos_k[int(np.clip(np.searchsorted(kfr, t), 0, len(kfr) - 1))]
+        rows.append([int(t), *pos, *(x if x is not None else (np.nan, np.nan, np.nan))])
+    out = pd.DataFrame(rows, columns=["frame", "cx", "cy", "cz", "pan", "tilt", "f"])
+    stats = {"motion_pairs": len(pairs), "motion_pair_frac": round(len(pairs) / max(len(frames) - 1, 1), 3),
+             "motion_closure_deg_median": round(float(np.median(closure)), 3) if closure else None,
+             "motion_closure_deg_p90": round(float(np.percentile(closure, 90)), 3) if closure else None}
+    return out, stats
+
+
 # ---------------------------------------------------------------- stage
 class CalibStage(Stage):
     name = "s2_calib"
@@ -460,10 +602,30 @@ class CalibStage(Stage):
                     sol[k] = r
             log.info("calib %s pass 2 (fixed camera at %s): valid %d -> %d / %d", self.shot_id,
                      np.round(pos, 1).tolist(), n_pass1, sum(ok_fit(sol[k]) for k in sol), len(keyframes))
+        # ---- pass 3: camera-motion consistency. Frame-to-frame image motion (background features)
+        # is an independent measurement of pan / tilt / zoom; a keyframe it contradicts from both
+        # sides is refit from the motion prediction, and dropped if the refit still disagrees.
+        pairs, motion_rejected, motion_refit = None, set(), 0
+        use_motion = bool(p.get("motion_interp", True))
+        if use_motion:
+            pairs = motion_pairs(video, shot.start_frame, shot.end_frame, dets)
+            good_k = [k for k in range(len(keyframes)) if ok_fit(sol[k])]
+            if len(good_k) >= 3:
+                tol = float(p.get("motion_tol_deg", 1.0))
+                outl = motion_outliers([keyframes[k] for k in good_k], [sol[k][0][3:] for k in good_k], pairs, w_img, h_img, tol)
+                for fr, pred in outl.items():
+                    k = keyframes.index(fr)
+                    r = refine_ptz(sol[k][0][:3], pred, masks[k], w_img, h_img)
+                    if ok_fit(r) and max(abs(r[0][3] - pred[0]), abs(r[0][4] - pred[1])) <= tol:
+                        sol[k] = r; motion_refit += 1
+                    else:
+                        motion_rejected.add(fr)
+                log.info("calib %s pass 3 (motion consistency): %d keyframes contradicted, %d refit, %d dropped",
+                         self.shot_id, len(outl), motion_refit, len(motion_rejected))
         rows, n_valid = [], 0
         for k, i in enumerate(keyframes):
             params, cost, cov, err, expl = sol[k]
-            valid = bool(ok_fit(sol[k]))
+            valid = bool(ok_fit(sol[k])) and i not in motion_rejected
             n_valid += int(valid)
             H = camera_H(params, w_img, h_img)
             rows.append({"frame": i, "valid": valid, "err_px": round(err, 2), "coverage": round(cov, 3), "explained": round(expl, 3), "cost": round(cost, 2),
@@ -474,9 +636,17 @@ class CalibStage(Stage):
         allf = np.arange(shot.start_frame, shot.end_frame + 1)
         good = df[df.valid]
         out = pd.DataFrame({"frame": allf})
-        if len(good) >= 1:
+        motion_stats = {}
+        if len(good) >= 2 and pairs is not None:
+            mo, motion_stats = motion_interpolate(good, pairs, allf, w_img, h_img)
+            motion_stats.update(motion_keyframes_refit=motion_refit, motion_keyframes_dropped=len(motion_rejected))
             for k in ("cx", "cy", "cz", "pan", "tilt", "f"):
-                out[k] = np.interp(allf, good.frame, good[k])
+                out[k] = mo[k].to_numpy()
+            log.info("calib %s motion interpolation: %s", self.shot_id, motion_stats)
+        if len(good) >= 1:
+            if not motion_stats:
+                for k in ("cx", "cy", "cz", "pan", "tilt", "f"):
+                    out[k] = np.interp(allf, good.frame, good[k])
             out["valid"] = np.abs(allf[:, None] - good.frame.to_numpy()[None, :]).min(1) <= every
             Hs = np.stack([camera_H(r[["cx", "cy", "cz", "pan", "tilt", "f"]].to_numpy(dtype=float), w_img, h_img).ravel() for _, r in out.iterrows()])
             for k in range(9):
@@ -492,7 +662,7 @@ class CalibStage(Stage):
         Storage.write_df(ctx.out("calib_keyframes.parquet"), df)
         return {"keyframes": len(df), "valid_frac": round(n_valid / max(len(df), 1), 3),
                 "median_err_px": float(df.err_px.median()) if len(df) else None,
-                "median_coverage": float(df.coverage.median()) if len(df) else None}
+                "median_coverage": float(df.coverage.median()) if len(df) else None, **motion_stats}
 
 
 def load_calib(uri: str) -> dict[int, np.ndarray] | None:
