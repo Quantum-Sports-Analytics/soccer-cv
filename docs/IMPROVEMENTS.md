@@ -102,7 +102,7 @@ ajustés en regardant ce clip et doivent être confrontés à d'autres condition
   Tous les seuils en pixels et en images supposent ce profil.
 - **Fait — garde-fou de plausibilité de la calibration** (`s4_track`, `calib_max_reject_frac` = 0,5) : si la calibration envoie hors
   terrain plus de la moitié des personnes debout sur la pelouse, elle est jugée fausse pour cette image (repli sur le masque de pelouse,
-  pas de position 2D). Sur la vidéo : joueurs de nouveau suivis dès 0 s (483 suivis la 1re seconde contre 15).
+  pas de position 2D). Sur la vidéo : joueurs de nouveau suivis dès 0 s (1re seconde : 483 détections suivies contre 0 ; 2e seconde : 540 contre 15).
 - **P0 — La calibration classique échoue sur un plan serré de surface vu en biais.** Solution dégénérée (une seule ligne, la touche
   proche, parfaitement calée, 47 % des lignes détectées expliquées) acceptée comme valide ; aucune des 36 positions caméra testées ne fait
   mieux : c'est la fonction de coût (lignes détectées partiellement) qui préfère la solution dégénérée, pas la recherche.
