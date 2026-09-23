@@ -29,6 +29,7 @@ calib:
   init: auto
   learned_max_resid_px: 6.0
   learned_agree_px: 6.0
+  max_motion_closure_p90_deg: 0.8
 track:
   max_age: 30
   min_hits: 3

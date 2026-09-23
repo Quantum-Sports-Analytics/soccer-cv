@@ -478,6 +478,19 @@ def motion_outliers(frames: list[int], ptz: list[np.ndarray], pairs: dict, img_w
     return out
 
 
+def motion_closure(keyframes: list[int], sol: dict, valid_k: dict, pairs: dict | None, img_w: int, img_h: int) -> float:
+    """p90 over consecutive valid keyframes of |pan|+|tilt| disagreement (deg) between the next
+    keyframe and the camera motion chained from the previous one. inf if not measurable."""
+    if not pairs:
+        return float("inf")
+    ks = [k for k in range(len(keyframes)) if valid_k.get(k)]
+    e = []
+    for a, b in zip(ks[:-1], ks[1:]):
+        x = chain_ptz(sol[a][0][3:], keyframes[a], keyframes[b], pairs, img_w, img_h)
+        e.append(abs(x[0] - sol[b][0][3]) + abs(x[1] - sol[b][0][4]))
+    return float(np.percentile(e, 90)) if len(e) >= 2 else float("inf")
+
+
 def motion_interpolate(kf: pd.DataFrame, pairs: dict, frames: np.ndarray, img_w: int, img_h: int) -> tuple[pd.DataFrame, dict]:
     """Per-frame camera params: keyframe values at valid keyframes, motion-chained in between
     (forward from a, backward from b, blended linearly in time; log-space for the focal)."""
@@ -569,9 +582,37 @@ class CalibStage(Stage):
             return {"keyframes": 0}
         # 2) anchor = the keyframe with the most line evidence among a few spread candidates, fitted
         #    from scratch with multi-start; then propagate forward and backward by refinement.
+        pairs = motion_pairs(video, shot.start_frame, shot.end_frame, dets) if bool(p.get("motion_interp", True)) else None
+        # Selection between the learned and the classical calibration of a shot, by an independent
+        # measurement: agreement of consecutive keyframes with the camera motion measured on the
+        # image background (motion_closure). Measured: the criterion picks the right one on both
+        # test videos (Barca clip: classical p90 0.43 deg vs learned 1.29; PSG-Arsenal: learned
+        # 0.57 vs classical 1.37, whose fit was degenerate).
+        max_cl = float(p.get("max_motion_closure_p90_deg", 0.8))
+        cands = []
         if use_learned:
-            sol, valid_k, lstats = self._learned_solutions(keyframes, masks, learned, w_img, h_img, p)
-            return self._finish(ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, lstats)
+            sol, valid_k, st = self._learned_solutions(keyframes, masks, learned, w_img, h_img, p)
+            sol, valid_k, st["_rejected"], st["_refit"] = self._motion_correct(keyframes, masks, sol, valid_k, pairs, w_img, h_img, p, st)
+            st["closure_p90"] = motion_closure(keyframes, sol, valid_k, pairs, w_img, h_img)
+            cands.append((sol, valid_k, st))
+        need_classical = not use_learned or (mode == "auto" and (cands[0][2]["closure_p90"] > max_cl or np.mean(list(cands[0][1].values())) < 0.7))
+        if need_classical:
+            sol, valid_k = self._classical_solutions(keyframes, masks, w_img, h_img, p)
+            st = {"init": "classical"}
+            sol, valid_k, st["_rejected"], st["_refit"] = self._motion_correct(keyframes, masks, sol, valid_k, pairs, w_img, h_img, p, st)
+            st["closure_p90"] = motion_closure(keyframes, sol, valid_k, pairs, w_img, h_img)
+            cands.append((sol, valid_k, st))
+        def rank(c):
+            vf = np.mean(list(c[1].values()))
+            return (c[2]["closure_p90"] if vf >= 0.5 else np.inf, -vf)
+        sol, valid_k, st = min(cands, key=rank)
+        st = dict(st); st["candidates"] = {c[2]["init"]: round(float(c[2]["closure_p90"]), 3) for c in cands}
+        log.info("calib %s chosen %s (motion closure p90 per candidate: %s)", self.shot_id, st["init"], st["candidates"])
+        return self._finish(ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, st, pairs)
+
+    def _classical_solutions(self, keyframes, masks, w_img, h_img, p):
+        """White-line chamfer fit: multi-start anchors, propagation, fixed-position PTZ pass."""
+        max_err, min_cov = float(p.get("max_err_px", 3.5)), float(p.get("min_coverage", 0.30))
         n_anchor = int(p.get("anchor_candidates", 3))
         idx = np.linspace(0, len(keyframes) - 1, min(n_anchor, len(keyframes))).round().astype(int)
         min_expl = float(p.get("min_explained", 0.30))
@@ -618,8 +659,7 @@ class CalibStage(Stage):
                     sol[k] = r
             log.info("calib %s pass 2 (fixed camera at %s): valid %d -> %d / %d", self.shot_id,
                      np.round(pos, 1).tolist(), n_pass1, sum(ok_fit(sol[k]) for k in sol), len(keyframes))
-        valid_k = {k: bool(ok_fit(sol[k])) for k in range(len(keyframes))}
-        return self._finish(ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, {"init": "classical"})
+        return sol, {k: bool(ok_fit(sol[k])) for k in range(len(keyframes))}
 
     def _learned_solutions(self, keyframes, masks, learned, w_img, h_img, p):
         """Learned camera at every keyframe it succeeds on -> camera position fixed to their median ->
@@ -668,15 +708,11 @@ class CalibStage(Stage):
         log.info("calib %s learned init: %s", self.shot_id, stats)
         return sol, valid_k, stats
 
-    def _finish(self, ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, init_stats):
-        every = int(p.get("every_n_frames", 5))
-        # ---- pass 3: camera-motion consistency. Frame-to-frame image motion (background features)
-        # is an independent measurement of pan / tilt / zoom; a keyframe it contradicts from both
-        # sides is refit from the motion prediction, and dropped if the refit still disagrees.
-        pairs, motion_rejected, motion_refit = None, set(), 0
-        use_motion = bool(p.get("motion_interp", True))
-        if use_motion:
-            pairs = motion_pairs(video, shot.start_frame, shot.end_frame, dets)
+    def _motion_correct(self, keyframes, masks, sol, valid_k, pairs, w_img, h_img, p, init_stats):
+        """Pass 3 on one candidate: refit (classical) or drop keyframes the camera motion contradicts."""
+        sol = dict(sol)
+        motion_rejected, motion_refit = set(), 0
+        if pairs is not None:
             good_k = [k for k in range(len(keyframes)) if valid_k[k]]
             if len(good_k) >= 3:
                 tol = float(p.get("motion_tol_deg", 1.0))
@@ -690,6 +726,15 @@ class CalibStage(Stage):
                         motion_rejected.add(fr)
                 log.info("calib %s pass 3 (motion consistency): %d keyframes contradicted, %d refit, %d dropped",
                          self.shot_id, len(outl), motion_refit, len(motion_rejected))
+        vk = {k: bool(valid_k[k]) and keyframes[k] not in motion_rejected for k in valid_k}
+        return sol, vk, motion_rejected, motion_refit
+
+    def _finish(self, ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, init_stats, pairs=None):
+        every = int(p.get("every_n_frames", 5))
+        # ---- pass 3: camera-motion consistency. Frame-to-frame image motion (background features)
+        # is an independent measurement of pan / tilt / zoom; a keyframe it contradicts from both
+        # sides is refit from the motion prediction, and dropped if the refit still disagrees.
+        motion_rejected, motion_refit = init_stats.pop("_rejected", set()), init_stats.pop("_refit", 0)
         rows, n_valid = [], 0
         for k, i in enumerate(keyframes):
             params, cost, cov, err, expl = sol[k]
@@ -731,7 +776,7 @@ class CalibStage(Stage):
         return {"keyframes": len(df), "valid_frac": round(n_valid / max(len(df), 1), 3),
                 "median_err_px": float(df.err_px.median()) if len(df) else None,
                 "median_coverage": float(df.coverage.median()) if len(df) else None, **motion_stats,
-                **{k_: v for k_, v in init_stats.items() if k_ != "camera_position"}}
+                **{k_: (round(v, 3) if isinstance(v, float) else v) for k_, v in init_stats.items() if k_ != "camera_position"}}
 
 
 def load_calib(uri: str) -> dict[int, np.ndarray] | None:

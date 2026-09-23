@@ -32,6 +32,7 @@ calib:                    # stages 1-2 — white-line mask + parametric broadcas
   refit_every_keyframes: 10
   init: auto               # auto = learned (PnLCalib, if PNLCALIB_DIR is set) else classical | learned | classical
   learned_max_resid_px: 6.0
+  max_motion_closure_p90_deg: 0.8   # above this, the classical fit is also run and the shot keeps the one agreeing best with camera motion
   learned_agree_px: 6.0     # line polish kept only if it moves the learned solution by <= this
   motion_interp: true      # camera motion between keyframes from background features (TV graphics excluded)
   motion_tol_deg: 1.0     # keyframe dropped/refit if the motion contradicts it from both sides by more than this

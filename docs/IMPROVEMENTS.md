@@ -108,5 +108,11 @@ ajustés en regardant ce clip et doivent être confrontés à d'autres condition
   mieux : c'est la fonction de coût (lignes détectées partiellement) qui préfère la solution dégénérée, pas la recherche.
   *Proposé* : modèle appris de points clés + lignes du terrain (PnLCalib, GPL-2.0, poids publiés), la calibration classique restant en repli
   et la passe 3 (mouvement caméra) en lissage. *Terminé quand* : la vidéo PSG – Arsenal est calibrée sur toute sa durée, sans dégrader le clip Barça.
+- **Fait (23/09) — calibration apprise + arbitrage par le mouvement caméra.** PnLCalib (points clés + lignes) sert d'initialisation ;
+  si sa cohérence avec le mouvement caméra mesuré est insuffisante (p90 > 0,8°), la calibration classique est aussi calculée,
+  et l'arbitre retient, par plan, celle qui s'accorde le mieux avec le mouvement mesuré (après la passe 3).
+  Mesuré : PSG – Arsenal → apprise (p90 1,06° contre 1,37° ; classique dégénérée), 9/9 images clés valides ;
+  Barça / Real → classique (0,44° contre 1,36°), 0 % de vitesses > 10 m/s, les 12 croisements validés inchangés.
+  *Limite* : sur un plan que les deux méthodes ratent, l'arbitre choisit le moins mauvais — le garde-fou du tracker reste le filet.
 - **P2 — Paramètres exprimés en images** (durée de vie des pistes, fenêtres, porte ballon) : les passer en secondes pour garder les 50 fps
   des broadcasts au lieu de sous-échantillonner à 25.
