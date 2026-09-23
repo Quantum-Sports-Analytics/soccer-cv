@@ -204,6 +204,9 @@ Une identité fausse présentée comme vraie est l'erreur la plus coûteuse pour
     <li><strong>Coût</strong> : distance de chanfrein symétrique tronquée. On mesure à la fois « les lignes du modèle tombent-elles sur des lignes détectées ? » (image de distance) et « les lignes détectées sont-elles expliquées par le modèle ? » (plus proche voisin par KD-tree).</li>
     <li><strong>Recherche</strong> : grille grossière en quart de résolution → descente locale depuis les 60 meilleurs départs → affinage en demi-résolution. La caméra est cherchée côté tribune principale uniquement : le terrain est symétrique, et c'est la convention TV, ce qui fixe aussi le sens gauche / droite.</li>
     <li><strong>Deux passes</strong> : (1) propagation image clé par image clé (1 par seconde) depuis la meilleure ; (2) la caméra principale ne se déplace pas pendant un plan, donc sa position est fixée à la médiane et seules pan, tilt et focale sont réajustées (3 degrés de liberté au lieu de 6).</li>
+    <li><strong>Passe 3 — mouvement de caméra</strong> : entre deux images clés, le mouvement réel de la caméra est mesuré image par image. On apparie des points caractéristiques (ORB) de l'arrière-plan, joueurs masqués, puis on ajuste pan / tilt / zoom (une caméra fixe ne fait que tourner et zoomer).
+      Ce mouvement est enchaîné depuis l'image clé précédente et depuis la suivante, puis les deux sont mélangés, pour être exact aux deux bouts sans dérive.
+      Il sert aussi de contrôle : une image clé que le mouvement contredit des deux côtés (plus de 1°) est recalculée depuis la prédiction du mouvement, ou écartée.</li>
     <li><strong>Validité</strong> : une image clé est acceptée si au moins 30 % du modèle visible colle à une ligne, si au moins 30 % des lignes détectées sont expliquées, et si l'erreur est d'au plus 3,5 px. Sinon elle est déclarée non calibrée plutôt que fausse. Entre deux images clés, les paramètres sont interpolés.</li>
   </ol>
   <h4>Difficultés → réponses</h4>
@@ -215,10 +218,14 @@ Une identité fausse présentée comme vraie est l'erreur la plus coûteuse pour
     <div>Deuxième critère de validité : la part des lignes détectées expliquées par le modèle. Une solution qui n'explique qu'une ligne est rejetée.</div>
     <div>Lignes publicitaires, tribunes, logos blancs pris pour des lignes.</div>
     <div>Masque de pelouse érodé, joueurs masqués, coût tronqué pour que les faux pixels ne dominent pas.</div>
+    <div>Pendant un panoramique rapide (32–38 s du clip), la vue 2D faisait « courir » les joueurs à 7–11 m/s, ce qui est impossible. Deux images clés étaient fausses : sauts d'inclinaison de 2–3° qu'aucun mouvement de caméra ne montre (ambiguïté inclinaison / zoom quand peu de lignes sont visibles).</div>
+    <div>Passe 3 : le mouvement mesuré image par image corrige ces images clés et remplace l'interpolation linéaire. Part des vitesses supérieures à 10 m/s : <b>4,96 % → 0 %</b>. Vitesse médiane entre 32 et 38 s : 7–11 → 3,8 m/s.</div>
+    <div>Les incrustations TV (score, logo) sont fixes à l'écran : 53 % des points appariés ne bougeaient pas, et le mouvement de caméra était sous-estimé de moitié.</div>
+    <div>Un appariement qui ne bouge pas est écarté dès qu'un ensemble cohérent de points mobiles existe. Écart résiduel entre le mouvement mesuré et les images clés : 0,2° par seconde (médiane).</div>
     <div>Images où trop peu de lignes sont visibles (milieu de terrain en gros plan).</div>
     <div>Position caméra fixée par plan (passe 2) : 3 paramètres restent à trouver, et 9 images clés perdues ont été récupérées (39/40 valides au lieu de 30/40).</div>
   </div>
-  <p class="measured">Mesuré (clip 40 s) : <b>97,5 % des images clés valides, erreur médiane 1,5 px</b>. Coût : <b>356 s pour 40 s de vidéo</b> (8,9 fois la durée), sur CPU pur. <b>C'est aujourd'hui le seul goulot de temps.</b> Les pistes pour le réduire sont dans <code>docs/IMPROVEMENTS.md</code>.</p>
+  <p class="measured">Mesuré (clip 40 s, run GPU <code>cloudrun-clip1-02</code>) : <b>97,5 % des images clés valides, erreur médiane 1,5 px</b>, 2 images clés recalculées par la passe 3. Coût : <b>397 s pour 40 s de vidéo</b> (9,9 fois la durée, dont environ 40 s pour la passe 3), sur CPU pur. <b>C'est aujourd'hui le seul goulot de temps.</b> Les pistes pour le réduire sont dans <code>docs/IMPROVEMENTS.md</code>.</p>
 </section>
 
 <section class="stage a" id="s4">
@@ -361,6 +368,15 @@ Une identité fausse présentée comme vraie est l'erreur la plus coûteuse pour
     <li>panneau d'effectif : visible / hors champ / incertain, et depuis combien de temps.</li>
   </ul>
   <p>L'overlay est le critère d'acceptation retenu sur nos propres vidéos, qui n'ont pas de vérité terrain.</p>
+  <h4>Vue 2D du terrain</h4>
+  <p><code>pitch2d.json</code> (<code>soccer_cv/tiers/pitch2d.py</code>) : joueurs, arbitre, ballon et champ de la caméra en mètres, image par image. La plateforme les dessine sous la vidéo, synchronisés avec la lecture :</p>
+  <ul>
+    <li>position des pieds lissée sur 9 images (0,36 s) par identité ;</li>
+    <li>ballon projeté au sol, exact au sol mais décalé quand il est en l'air (état « en vol » affiché) ;</li>
+    <li>champ de la caméra projeté sur le terrain, pour voir pourquoi un joueur « disparaît » ;</li>
+    <li>traînées de 2 s.</li>
+  </ul>
+  <p>Seuls les joueurs filmés sont placés : ceux hors champ ne sont pas estimés. La vue 2D sert aussi de contrôle qualité : une vitesse impossible y saute aux yeux, et c'est ainsi qu'on a trouvé le défaut corrigé par la passe 3.</p>
 </section>
 
 <!-- ================================================================== -->
@@ -370,7 +386,7 @@ Une identité fausse présentée comme vraie est l'erreur la plus coûteuse pour
 
 <table>
   <tr><th>Élément</th><th>Service GCP</th><th>Rôle</th></tr>
-  <tr><td>Plateforme web</td><td>Cloud Run <em>service</em> <code>soccer-cv-demo</code> (CPU, 2 vCPU, 4 Go)</td><td>Page d'envoi, historique des vidéos, lecteur overlay / original, fiche qualité, tableau des croisements, voyant GPU, annulation. Elle orchestre aussi chaque calcul : découpage, Tier B, Tier C.</td></tr>
+  <tr><td>Plateforme web</td><td>Cloud Run <em>service</em> <code>soccer-cv-demo</code> (CPU, 2 vCPU, 4 Go)</td><td>Page d'envoi, historique des vidéos, lecteur overlay / original, <b>vue 2D synchronisée sous la vidéo</b>, fiche qualité et croisements dans des menus repliés, voyant GPU, annulation. Elle orchestre aussi chaque calcul : découpage, Tier B, Tier C.</td></tr>
   <tr><td>Calcul GPU</td><td>Cloud Run <em>jobs</em> <code>scv-tiera-*</code>, 1 NVIDIA L4 par plan</td><td>Tier A. Le job est créé à la demande et <strong>supprimé dès la fin</strong>, qu'il réussisse, échoue ou soit interrompu.</td></tr>
   <tr><td>Stockage</td><td>Cloud Storage <code>gs://soccer-cv</code></td><td>Vidéos, résultats de chaque run (ils survivent aux redémarrages et forment l'historique), code versionné.</td></tr>
   <tr><td>Images</td><td>Artifact Registry <code>soccer-cv/tier-a</code> (GPU, 6,5 Go), <code>tier-bc</code> (plateforme, 0,5 Go)</td><td>Construites par Cloud Build.</td></tr>
@@ -419,9 +435,10 @@ Une correction de code ne demande donc <em>jamais</em> de reconstruire l'image G
 
 <table>
   <tr><th>Limite</th><th>Effet</th><th>Suite prévue</th></tr>
-  <tr><td>Calibration sur CPU : 8,9 fois la durée de la vidéo</td><td>Seul goulot de temps de la pipeline</td><td>Images clés plus espacées avec la passe à position fixe, parallélisation sur les 8 vCPU, grille vectorisée, puis modèle de points clés appris</td></tr>
+  <tr><td>Calibration sur CPU : 9,9 fois la durée de la vidéo</td><td>Seul goulot de temps de la pipeline</td><td>Images clés plus espacées avec la passe à position fixe, parallélisation sur les 8 vCPU, grille vectorisée, puis modèle de points clés appris</td></tr>
   <tr><td>Réglages validés sur un seul clip (Barça – Real)</td><td>Généralisation non démontrée</td><td>Tester de nouvelles vidéos depuis la plateforme et consigner chaque défaut dans <code>docs/IMPROVEMENTS.md</code></td></tr>
   <tr><td>Détecteur générique non réentraîné, pas de détecteur de ballon spécialisé</td><td>Petits joueurs lointains et ballon perdus plus souvent</td><td>Découpage adaptatif (prêt), puis réentraînement ou détecteur de ballon temporel</td></tr>
+  <tr><td>Hauteur du ballon non estimée</td><td>Dans la vue 2D, le ballon en l'air est projeté trop loin</td><td>Trajectoire 3D balistique sur les phases « en vol »</td></tr>
   <tr><td>Classification des plans heuristique</td><td>Un ralenti peut être traité comme un plan normal</td><td>Petit classifieur de type de plan</td></tr>
   <tr><td>Démarrage à froid d'un job GPU : 80 à 270 s</td><td>Pèse sur les vidéos courtes</td><td>Image plus légère, ou regroupement des plans par job</td></tr>
   <tr><td>Couche « masques » (SAM) et ballon 3D non branchées</td><td>Occlusions longues traitées par l'apparence seule</td><td>Palier qualité optionnel, déclenché seulement sur les fenêtres ambiguës</td></tr>
@@ -431,7 +448,7 @@ Une correction de code ne demande donc <em>jamais</em> de reconstruire l'image G
 <code>docs/reference_traceability.md</code> (quel article justifie quel choix), <code>docs/IMPROVEMENTS.md</code> (liste d'améliorations priorisée),
 <code>docs/DEPLOY_NOW.md</code> (mise en ligne).</p>
 
-<footer>soccer-cv · document généré à partir du code du dépôt au commit a9e3ed8 et des mesures du 22/09/2026 (clip de test 40 s, NVIDIA L4, Cloud Run europe-west1).</footer>
+<footer>soccer-cv · document généré à partir du code du dépôt et des mesures des 22 et 23/09/2026 (clip de test 40 s, NVIDIA L4, Cloud Run europe-west1).</footer>
 </main>
 </body>
 </html>
