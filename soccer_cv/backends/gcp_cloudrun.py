@@ -56,6 +56,23 @@ CODE_FETCH = ("python - <<'PY'\n"
               "PY\n")
 
 
+# Learned field calibration (PnLCalib code + weights, ~530 MB), fetched once per task unless the
+# image already ships it (PNLCALIB_DIR set). Its two pure/binary-wheel deps are installed alongside.
+PNLCALIB_URI = "gs://soccer-cv/models/pnlcalib-v1.tar"
+MODELS_FETCH = ("if [ -n \"$PNLCALIB_URI\" ] && [ ! -d \"${PNLCALIB_DIR:-/nonexistent}\" ]; then\n"
+                "python - <<'PY'\n"
+                "import os, tarfile\n"
+                "from google.cloud import storage\n"
+                "u = os.environ['PNLCALIB_URI'][5:]; b, k = u.split('/', 1)\n"
+                "storage.Client().bucket(b).blob(k).download_to_filename('/tmp/pnl.tar')\n"
+                "tarfile.open('/tmp/pnl.tar').extractall('/opt/pnlcalib'); os.remove('/tmp/pnl.tar')\n"
+                "print('pnlcalib fetched', k)\n"
+                "PY\n"
+                "pip install -q lsq-ellipse shapely || true\n"
+                "export PNLCALIB_DIR=/opt/pnlcalib\n"
+                "fi\n")
+
+
 class CloudRunJobsBackend(Backend):
     name = "cloudrun"
 
@@ -83,7 +100,7 @@ class CloudRunJobsBackend(Backend):
         if getattr(self, "command_override", None):
             return self.command_override
         if with_code:
-            return "set -e\n" + CODE_FETCH + TIER_A_CMD.format(prefix="cd /code && PYTHONPATH=/code ")
+            return "set -e\n" + CODE_FETCH + MODELS_FETCH + TIER_A_CMD.format(prefix="cd /code && PYTHONPATH=/code ")
         return TIER_A_CMD.format(prefix="")
 
     def build_job(self, tasks: list[ShotTask], run_v2=None, code_uri: str | None = None):
@@ -98,7 +115,7 @@ class CloudRunJobsBackend(Backend):
                "PYTHONFAULTHANDLER": "1", "PYTHONUNBUFFERED": "1",
                # rfdetr's import-time torch.jit.script segfaults on torch 2.6 (image built from the
                # cu124 index); eager mode is equivalent for these box-geometry helpers.
-               "PYTORCH_JIT": "0"}
+               "PYTORCH_JIT": "0", "PNLCALIB_URI": PNLCALIB_URI}
         if code_uri:
             env["CODE_URI"] = code_uri
         container = run_v2.Container(

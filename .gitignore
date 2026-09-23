@@ -12,3 +12,4 @@ runs/
 weights/
 submitter-key.json
 *-key.json
+third_party/

@@ -532,6 +532,10 @@ class CalibStage(Stage):
         super().__init__(cfg)
         self.shot_id, self.ingest_uri = shot_id, ingest_uri
 
+    @staticmethod
+    def _ok(r, p) -> bool:
+        return r[2] >= float(p.get("min_coverage", 0.30)) and r[3] <= float(p.get("max_err_px", 3.5)) and r[4] >= float(p.get("min_explained", 0.30))
+
     def run(self, ctx: StageContext) -> dict:
         from .s0_ingest import load_shots
         p = self.params
@@ -545,17 +549,29 @@ class CalibStage(Stage):
             dets = Storage.read_df(ctx.inp("detections.parquet"))
             dets = {int(k): g[["x1", "y1", "x2", "y2"]].to_numpy() for k, g in dets.groupby("frame")}
         # 1) line masks at keyframes
-        keyframes, masks = [], []
+        from .. import calib_learned as CL
+        mode = str(p.get("init", "auto"))                  # auto | learned | classical
+        use_learned = mode == "learned" or (mode == "auto" and CL.available())
+        if mode == "learned" and not CL.available():
+            raise RuntimeError("calib.init=learned but PNLCALIB_DIR is not set up (scripts/fetch_pnlcalib.sh)")
+        device = str(self.cfg.get("runtime", {}).get("device", "cpu"))
+        keyframes, masks, learned = [], [], []
         for i, frame in frames_iter(video, shot.start_frame, shot.end_frame):
             if (i - shot.start_frame) % every:
                 continue
             h_img, w_img = frame.shape[:2]
             keyframes.append(i); masks.append(line_mask(frame, dets.get(i) if dets else None))
+            if use_learned:
+                Pl = CL.pnl_projection(frame, device=device)
+                learned.append(CL.params_from_projection(Pl, w_img, h_img, camera_P, MODEL_DENSE[::5]) + (Pl,) if Pl is not None else None)
         if not keyframes:
             Storage.write_df(ctx.out("calib.parquet"), pd.DataFrame(columns=["frame", "valid"]))
             return {"keyframes": 0}
         # 2) anchor = the keyframe with the most line evidence among a few spread candidates, fitted
         #    from scratch with multi-start; then propagate forward and backward by refinement.
+        if use_learned:
+            sol, valid_k, lstats = self._learned_solutions(keyframes, masks, learned, w_img, h_img, p)
+            return self._finish(ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, lstats)
         n_anchor = int(p.get("anchor_candidates", 3))
         idx = np.linspace(0, len(keyframes) - 1, min(n_anchor, len(keyframes))).round().astype(int)
         min_expl = float(p.get("min_explained", 0.30))
@@ -602,6 +618,58 @@ class CalibStage(Stage):
                     sol[k] = r
             log.info("calib %s pass 2 (fixed camera at %s): valid %d -> %d / %d", self.shot_id,
                      np.round(pos, 1).tolist(), n_pass1, sum(ok_fit(sol[k]) for k in sol), len(keyframes))
+        valid_k = {k: bool(ok_fit(sol[k])) for k in range(len(keyframes))}
+        return self._finish(ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, {"init": "classical"})
+
+    def _learned_solutions(self, keyframes, masks, learned, w_img, h_img, p):
+        """Learned camera at every keyframe it succeeds on -> camera position fixed to their median ->
+        pan / tilt / zoom refit to each learned projection -> optional line polish, kept only if it
+        stays within `learned_agree_px` of the learned solution (white text on green boards otherwise
+        pulls the chamfer fit). Keyframes the model misses are filled by the classical refinement
+        from the nearest learned keyframe, with the classical validity test."""
+        from .. import calib_learned as CL
+        max_resid = float(p.get("learned_max_resid_px", 6.0))
+        agree = float(p.get("learned_agree_px", 6.0))
+        max_err, min_cov, min_expl = float(p.get("max_err_px", 3.5)), float(p.get("min_coverage", 0.30)), float(p.get("min_explained", 0.30))
+        ok_fit = lambda r: r[2] >= min_cov and r[3] <= max_err and r[4] >= min_expl   # noqa: E731
+        good = [k for k, l in enumerate(learned) if l is not None and l[1] <= max_resid]
+        stats = {"init": "learned", "learned_ok": len(good), "learned_failed": len(keyframes) - len(good)}
+        sol, valid_k = {}, {}
+
+        def score(params, k):
+            dt = cv2.distanceTransform(255 - masks[k], cv2.DIST_L2, 3)
+            c = chamfer_cost(camera_H(params, w_img, h_img), dt, w_img, h_img, mask_points(masks[k], 1.0, 2500), detail=True)
+            return (params, c[0], c[1], c[2], c[3])
+        if len(good) >= 2 and bool(p.get("fixed_position", True)):
+            pos = np.median(np.stack([learned[k][0][:3] for k in good]), 0)
+            stats["camera_position"] = np.round(pos, 1).tolist()
+            for k in good:
+                r = CL.ptz_from_projection(learned[k][2], pos, learned[k][0][3:], w_img, h_img, camera_P, MODEL_DENSE[::5])
+                if r is not None and r[1] <= max_resid:
+                    learned[k] = (r[0], r[1], learned[k][2])
+        n_polished = 0
+        for k in good:
+            base = score(learned[k][0], k)
+            pol = refine_ptz(learned[k][0][:3], learned[k][0][3:], masks[k], w_img, h_img) if bool(p.get("learned_polish", True)) else None
+            if pol is not None and pol[1] < base[1] and CL.model_displacement(camera_H(pol[0], w_img, h_img), camera_H(base[0], w_img, h_img), w_img, h_img, MODEL_DENSE[::5]) <= agree:
+                sol[k] = pol; n_polished += 1
+            else:
+                sol[k] = base
+            valid_k[k] = True
+        for k in range(len(keyframes)):
+            if k in sol:
+                continue
+            if not good:
+                sol[k] = (np.array([0, -60, 20, 0, 15, 3000.0]), np.inf, 0.0, np.inf, 0.0); valid_k[k] = False; continue
+            near = min(good, key=lambda g: abs(g - k))
+            r = refine_ptz(sol[near][0][:3], sol[near][0][3:], masks[k], w_img, h_img)
+            sol[k] = r; valid_k[k] = bool(ok_fit(r))
+        stats["learned_polished"] = n_polished
+        log.info("calib %s learned init: %s", self.shot_id, stats)
+        return sol, valid_k, stats
+
+    def _finish(self, ctx, shot, video, dets, keyframes, masks, sol, valid_k, w_img, h_img, p, init_stats):
+        every = int(p.get("every_n_frames", 5))
         # ---- pass 3: camera-motion consistency. Frame-to-frame image motion (background features)
         # is an independent measurement of pan / tilt / zoom; a keyframe it contradicts from both
         # sides is refit from the motion prediction, and dropped if the refit still disagrees.
@@ -609,14 +677,14 @@ class CalibStage(Stage):
         use_motion = bool(p.get("motion_interp", True))
         if use_motion:
             pairs = motion_pairs(video, shot.start_frame, shot.end_frame, dets)
-            good_k = [k for k in range(len(keyframes)) if ok_fit(sol[k])]
+            good_k = [k for k in range(len(keyframes)) if valid_k[k]]
             if len(good_k) >= 3:
                 tol = float(p.get("motion_tol_deg", 1.0))
                 outl = motion_outliers([keyframes[k] for k in good_k], [sol[k][0][3:] for k in good_k], pairs, w_img, h_img, tol)
                 for fr, pred in outl.items():
                     k = keyframes.index(fr)
                     r = refine_ptz(sol[k][0][:3], pred, masks[k], w_img, h_img)
-                    if ok_fit(r) and max(abs(r[0][3] - pred[0]), abs(r[0][4] - pred[1])) <= tol:
+                    if (init_stats.get("init") == "classical" and self._ok(r, p)) and max(abs(r[0][3] - pred[0]), abs(r[0][4] - pred[1])) <= tol:
                         sol[k] = r; motion_refit += 1
                     else:
                         motion_rejected.add(fr)
@@ -625,7 +693,7 @@ class CalibStage(Stage):
         rows, n_valid = [], 0
         for k, i in enumerate(keyframes):
             params, cost, cov, err, expl = sol[k]
-            valid = bool(ok_fit(sol[k])) and i not in motion_rejected
+            valid = bool(valid_k[k]) and i not in motion_rejected
             n_valid += int(valid)
             H = camera_H(params, w_img, h_img)
             rows.append({"frame": i, "valid": valid, "err_px": round(err, 2), "coverage": round(cov, 3), "explained": round(expl, 3), "cost": round(cost, 2),
@@ -662,7 +730,8 @@ class CalibStage(Stage):
         Storage.write_df(ctx.out("calib_keyframes.parquet"), df)
         return {"keyframes": len(df), "valid_frac": round(n_valid / max(len(df), 1), 3),
                 "median_err_px": float(df.err_px.median()) if len(df) else None,
-                "median_coverage": float(df.coverage.median()) if len(df) else None, **motion_stats}
+                "median_coverage": float(df.coverage.median()) if len(df) else None, **motion_stats,
+                **{k_: v for k_, v in init_stats.items() if k_ != "camera_position"}}
 
 
 def load_calib(uri: str) -> dict[int, np.ndarray] | None:

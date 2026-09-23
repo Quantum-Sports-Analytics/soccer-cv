@@ -20,4 +20,12 @@ RUN mkdir -p /weights/models /weights/reid && \
     curl -sSfL -o /weights/models/rf-detr-medium.pth https://rfdetr.storage.googleapis.com/medium_coco/checkpoint_best_regular.pth && \
     curl -sSfL -o /weights/reid/osnet_ain_x1_0_msmt17.pth \
       "https://huggingface.co/kaiyangzhou/osnet/resolve/main/osnet_ain_x1_0_msmt17_256x128_amsgrad_ep50_lr0.0015_coslr_b64_fb10_softmax_labsmth_flip_jitter.pth"
+# Learned field calibration (PnLCalib, GPL-2.0 — R&D use, see licence register). Pinned commit.
+ARG PNLCALIB_COMMIT=8c87391d6f4ea40c5e4d65e61529916c7a49ce62
+ENV PNLCALIB_DIR=/opt/pnlcalib
+RUN pip install lsq-ellipse shapely && \
+    git clone https://github.com/mguti97/PnLCalib.git /opt/pnlcalib && git -C /opt/pnlcalib checkout "$PNLCALIB_COMMIT" && \
+    mkdir -p /opt/pnlcalib/weights && \
+    curl -sSfL -o /opt/pnlcalib/weights/SV_kp    https://github.com/mguti97/PnLCalib/releases/download/v1.0.0/SV_kp && \
+    curl -sSfL -o /opt/pnlcalib/weights/SV_lines https://github.com/mguti97/PnLCalib/releases/download/v1.0.0/SV_lines
 ENTRYPOINT ["soccer-cv"]

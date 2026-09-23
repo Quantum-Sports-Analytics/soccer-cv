@@ -26,6 +26,9 @@ calib:
   refit_every_keyframes: 10
   motion_interp: true
   motion_tol_deg: 1.0
+  init: auto
+  learned_max_resid_px: 6.0
+  learned_agree_px: 6.0
 track:
   max_age: 30
   min_hits: 3

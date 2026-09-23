@@ -395,6 +395,8 @@ Every model or config change runs the hard-case set (§4.7) and reports the full
 
 ## 7. Licence register
 
+**Added 23/09 — PnLCalib** (learned field calibration, stage 2 initialisation): code **GPL-2.0**, weights trained on SoccerNet-Calibration. Not vendored (fetched by `scripts/fetch_pnlcalib.sh` / at GPU task start). Obligation before commercial release: replace with a permissively licensed keypoint model trained on our own annotations, or obtain a licence; the classical line fit remains as fallback (`calib.init: classical`).
+
 Chosen per your direction — best model now, obligations tracked for cleanup before commercial release.
 
 | Component | Licence | Risk if shipped | Replacement path |
