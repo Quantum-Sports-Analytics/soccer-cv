@@ -189,7 +189,7 @@ Une identité fausse présentée comme vraie est l'erreur la plus coûteuse pour
     <div>En mêlée, deux joueurs peuvent donner une seule boîte, ou une boîte à cheval sur deux corps.</div>
     <div>Traité en aval : le suivi mesure le recouvrement entre boîtes et s'en méfie (<a href="#s4">étape 4</a>), et les croisements sont revérifiés (<a href="#s5">étape 5</a>).</div>
   </div>
-  <p class="measured">Mesuré : <b>40 s pour 40 s de vidéo</b> sur L4 (1 000 images, soit environ 25 images/s). Sur CPU : 70 s pour 100 images, donc la L4 va 8,5 fois plus vite.</p>
+  <p class="measured">Mesuré, même modèle (RF-DETR small, 896 px) : clip complet de 1 000 images en <b>40 s sur L4</b> (environ 25 images/s, temps réel) contre 1 123 s sur CPU, soit <b>×28</b>. Sur l'extrait de 100 images : 8,3 s sur L4 contre 70 s sur CPU (×8,5 seulement, parce que le chargement du modèle pèse lourd sur un calcul aussi court).</p>
 </section>
 
 <section class="stage a" id="s2">
